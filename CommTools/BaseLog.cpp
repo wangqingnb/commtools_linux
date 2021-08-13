@@ -1,3 +1,9 @@
+/*
+
+   Written by RockyWang
+*/
+
+
 #include "BaseLog.h"
 
 CBaseLog::CBaseLog(void)
