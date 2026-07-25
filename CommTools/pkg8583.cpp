@@ -6,14 +6,27 @@
 
 void T8583Field::SetData(const char* pData, const DWORD &Len)
 {
+	if (Len > FIELD_DATA_MAX_SIZE)
+	{
+		char Buf[MAX_MSG_SIZE];
+		snprintf(Buf, sizeof(Buf), "T8583Field::SetData Len(%u) > FIELD_DATA_MAX_SIZE", (unsigned)Len);
+		throw CRK_Exception(Buf);
+	}
 	m_DataLen = Len;
-	memcpy(m_Data, pData, Len);
+	if (Len > 0 && pData != NULL)
+		memcpy(m_Data, pData, Len);
 }
 
 void T8583Field::GetBinData(char* pData, DWORD& Len, DWORD StartPos)
 {
+	if (StartPos > m_DataLen)
+	{
+		Len = 0;
+		return;
+	}
 	Len = m_DataLen - StartPos;
-	memcpy(pData, &m_Data[StartPos], Len);
+	if (Len > 0 && pData != NULL)
+		memcpy(pData, &m_Data[StartPos], Len);
 }
 
 string T8583Field::AsString()

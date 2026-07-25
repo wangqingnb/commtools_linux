@@ -6,7 +6,7 @@
 #include <pthread.h>
 
 
-//�������ݶ���
+//报文数据对象
 class TCommObj
 {
 public:
@@ -16,22 +16,22 @@ public:
 
 typedef struct _TCOMMParm {
     WORD RemotePort;
-    char RemoteIP[64];  //Զ�̷����ַ
-    WORD LocalPort;  //��������˿�
-    char LocalIP[64];  //���������ַ�������ж����ַʱ��ָ��ĳ����ַ��Ϊ���ط����ַ��
-    char ClientIP[64];  //�����ͻ���IP�������ж����ַʱ��ָ��ĳ����ַ��Ϊ�ͻ��˷��������ĵ�ַ��
+    char RemoteIP[64];  //远程服务地址
+    WORD LocalPort;  //本机服务端口
+    char LocalIP[64];  //本机服务地址（本机有多个地址时可指定某个地址作为本地服务地址）
+    char ClientIP[64];  //本机客户端IP（本机有多个地址时可指定某个地址作为客户端访问主机的地址）
     WORD RemoteIdleSec;
     WORD LocalIdleSec;
     PtrQueue* pSendQueue;
     PtrQueue* pRecvQueue;
-    DWORD QueryE3toSucc;  //1-Ӧ����E3ת00�� 0-��ת
+    DWORD QueryE3toSucc;  //1-应答码E3转00， 0-不转
 } TCOMMParm, * PCOMMParm;
 
 
 class TCupsCOMM
 {
 private:
-    CBaseLog* LogObj;  //��־�ӿڶ���
+    CBaseLog* LogObj;  //日志接口对象
     bool m_Started;
     pthread_t  m_ThreadId;
     bool m_Terminated;

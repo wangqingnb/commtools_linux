@@ -1,5 +1,6 @@
 CC=gcc
 CXX=g++
+AR ?= ar
 
 ifndef PLATFORM 
 	PLATFORM = x64

@@ -2,20 +2,20 @@
 #include "commroute.h"
 
 #pragma pack(1)
-//½É·ÑÍ³¼ÆĞÅÏ¢£¬ÓÃÓÚÍ³¼Æ³É¹¦ÂÊ¡¢TPS
+//ç¼´è´¹ç»Ÿè®¡ä¿¡æ¯ï¼Œç”¨äºç»Ÿè®¡æˆåŠŸç‡ã€TPS
 typedef struct _TStatistics {
-	int tx_num_all;  //×Ü½»Ò×±ÊÊı
-	int tx_num_suc;  //³É¹¦½»Ò×±ÊÊı
-	_U64  b_tick;  //²ÉÑùÆğÊ¼ÏµÍ³tick
-	_U64  e_tick;  //²ÉÑù½áÊøÏµÍ³Ê±¼ä
+	int tx_num_all;  //æ€»äº¤æ˜“ç¬”æ•°
+	int tx_num_suc;  //æˆåŠŸäº¤æ˜“ç¬”æ•°
+	_U64  b_tick;  //é‡‡æ ·èµ·å§‹ç³»ç»Ÿtick
+	_U64  e_tick;  //é‡‡æ ·ç»“æŸç³»ç»Ÿæ—¶é—´
 }  TStatistics, *PStatistics;
 #pragma pack()
 
 class TransSampling
 {
 private:
-	TStatistics CurStatistics;  //µ±Ç°ÖÜÆÚ
-	TStatistics HisStatistics;  //Æô¶¯ÒÔÀ´
+	TStatistics CurStatistics;  //å½“å‰å‘¨æœŸ
+	TStatistics HisStatistics;  //å¯åŠ¨ä»¥æ¥
 	pthread_mutex_t m_mutex;
 	void Lock();
 	void UnLock();
@@ -23,8 +23,8 @@ private:
 public:
 	TransSampling();
 	~TransSampling();
-	void AddSucTx(int iNum=1);  //Ìí¼Ó³É¹¦½»Ò×Á¿
-	void AddTx(int iNum=1);     //Ìí¼Ó×Ü½»Ò×Á¿
+	void AddSucTx(int iNum=1);  //æ·»åŠ æˆåŠŸäº¤æ˜“é‡
+	void AddTx(int iNum=1);     //æ·»åŠ æ€»äº¤æ˜“é‡
 	void Reset();
 	void GetStatistics(PStatistics pStatistics, bool bReset = true);
 };

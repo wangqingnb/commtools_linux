@@ -1,7 +1,7 @@
 #pragma once
 //#include "des.h"
 
-//mac -Êä³öµÄmac½á¹û£¬ data-ÊäÈëµÄÊı¾İ  len-ÊäÈëÊı¾İ³¤¶È  mac_key-mackeyÃ÷ÎÄ, KeyMode-MacÃÜÔ¿ÀàĞÍ,  init_v-³õÊ¼ÏòÁ¿
+//mac -è¾“å‡ºçš„macç»“æœï¼Œ data-è¾“å…¥çš„æ•°æ®  len-è¾“å…¥æ•°æ®é•¿åº¦  mac_key-mackeyæ˜æ–‡, KeyMode-Macå¯†é’¥ç±»å‹,  init_v-åˆå§‹å‘é‡
 void CalcMACCBC(UCHAR* mac, UCHAR* data, DWORD len, UCHAR* mac_key,
   TDESKeyMode KeyMode = Single, UCHAR* init_v = nullptr);
 

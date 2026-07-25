@@ -55,7 +55,7 @@ void CalcMACCBC_XOR(UCHAR* mac, UCHAR* data, DWORD len, UCHAR* mac_key,
 	for (DWORD j = 0; j <= 7; j++)
     	HexData[j] =  T_mac[j] ^HexData[j+8];
 	DesEncry((UCHAR*)HexData, mac_key, (UCHAR*)T_mac, 8, KeyMode);
-	BinToHex(T_mac, HexData, sizeof(T_mac)); //ת��ΪASCII
-	memcpy(mac, HexData, 8);  //ǰ8���ֽڸ�ֵ��MAC
+	BinToHex(T_mac, HexData, sizeof(T_mac)); //转换为ASCII
+	memcpy(mac, HexData, 8);  //前8个字节赋值给MAC
 }
 

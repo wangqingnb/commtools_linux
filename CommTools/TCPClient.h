@@ -11,31 +11,31 @@ class TCPClient;
 typedef void(*PRecvSendEvent)(char* Buf, long Len, long ExpLen, void* pClass);
 typedef void(*PConnectStatusEvent)(void* pClass);
 
-#define MAX_EPWEVENT_NUM 20  //Ò»´ÎµÈ´ıEPollÊÂ¼şµÄ×î´óÊı
-#define WAIT_TIME_OUT  300   //µÈ´ıEPollÊÂ¼ş³¬Ê±Öµ£¨ºÁÃë£©
+#define MAX_EPWEVENT_NUM 20  //ä¸€æ¬¡ç­‰å¾…EPolläº‹ä»¶çš„æœ€å¤§æ•°
+#define WAIT_TIME_OUT  300   //ç­‰å¾…EPolläº‹ä»¶è¶…æ—¶å€¼ï¼ˆæ¯«ç§’ï¼‰
 
 class TCPClient
 {
 private:
-	char m_ServerIP[128];  //·şÎñÆ÷µØÖ·
-	char m_LocalIP[128];  //±¾¶ËµØÖ·
-	WORD m_ServerPort; //Ô¶¶Ë·şÎñÆ÷¼àÌı¶Ë¿Ú
+	char m_ServerIP[128];  //æœåŠ¡å™¨åœ°å€
+	char m_LocalIP[128];  //æœ¬ç«¯åœ°å€
+	WORD m_ServerPort; //è¿œç«¯æœåŠ¡å™¨ç›‘å¬ç«¯å£
 
-	//È«¾ÖÍ³¼ÆĞÅÏ¢
-	_U64 volatile m_TotalRecvBytes;  //½ÓÊÕ×Ö½ÚºÏ¼Æ
-	_U64 volatile m_TotalSentBytes;  //·¢ËÍ×Ö½ÚºÏ¼Æ
+	//å…¨å±€ç»Ÿè®¡ä¿¡æ¯
+	_U64 volatile m_TotalRecvBytes;  //æ¥æ”¶å­—èŠ‚åˆè®¡
+	_U64 volatile m_TotalSentBytes;  //å‘é€å­—èŠ‚åˆè®¡
 
 	pthread_mutex_t m_mutex;
-	int m_epfd;    //epollÊÂ¼şÃèÊö·û
+	int m_epfd;    //epolläº‹ä»¶æè¿°ç¬¦
 
 	struct sockaddr_in  ClientAddr;
 	struct sockaddr_in  ServerAddr;
 
 	SOCKET ClientSocket;
 	bool m_Terminated;
-	CBaseLog* LogObj;  //ÈÕÖ¾½Ó¿Ú¶ÔÏó
+	CBaseLog* LogObj;  //æ—¥å¿—æ¥å£å¯¹è±¡
 
-	//»Øµ÷º¯ÊıÖ¸Õë
+	//å›è°ƒå‡½æ•°æŒ‡é’ˆ
 	PRecvSendEvent m_OnRecvCompleted;
 	void* RegOnRecvCompletedClass;
 

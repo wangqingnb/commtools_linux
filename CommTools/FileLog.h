@@ -1,4 +1,5 @@
 #pragma once
+#include <stdio.h>
 #include "BaseLog.h"
 
 class CFileLog :
@@ -11,6 +12,6 @@ private:
 public:
     CFileLog(const char* FileName, bool bAddDateTime=false);
     virtual ~CFileLog(void);
-    void virtual WriteLog(string& pStr);
-	void virtual WriteLogWithFormat(char* pszFormat, ...);
+    virtual void WriteLog(const char* s);
+    virtual void WriteLogWithFormat(const char* pszFormat, ...);
 };

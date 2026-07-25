@@ -3,10 +3,12 @@
 
 #include <string>
 #include <fstream>
+#include <stdint.h>
 
 /* Type define */
 typedef unsigned char byte;
-typedef unsigned long ulong;
+/* MD5 requires 32-bit words; avoid name `ulong` (conflicts with sys/types.h on Linux) */
+typedef uint32_t md5_u32;
 
 using std::string;
 using std::ifstream;
@@ -28,16 +30,16 @@ private:
 	void update(const byte *input, size_t length);
 	void final();
 	void transform(const byte block[64]);
-	void encode(const ulong *input, byte *output, size_t length);
-	void decode(const byte *input, ulong *output, size_t length);
+	void encode(const md5_u32 *input, byte *output, size_t length);
+	void decode(const byte *input, md5_u32 *output, size_t length);
 	string bytesToHexString(const byte *input, size_t length);
 
 	/* class uncopyable */
 	MD5(const MD5&);
 	MD5& operator=(const MD5&);
 private:
-	ulong _state[4];	/* state (ABCD) */
-	ulong _count[2];	/* number of bits, modulo 2^64 (low-order word first) */
+	md5_u32 _state[4];	/* state (ABCD) */
+	md5_u32 _count[2];	/* number of bits, modulo 2^64 (low-order word first) */
 	byte _buffer[64];	/* input buffer */
 	byte _digest[16];	/* message digest */
 	bool _finished;		/* calculate finished ? */

@@ -15,11 +15,11 @@
 
 typedef struct _TCPLinkStatics
 {
-	_U64 RecvTotalBytes;  //½ÓÊÕ×Ö½ÚºÏ¼Æ
-	_U64 SendTotalBytes;  //·¢ËÍ×Ö½ÚºÏ¼Æ
-	struct tm ConnectedDT;  //Á¬½Ó½¨Á¢Ê±¼ä
-	_U64  FirstActiveTick;  //Á¬½Ó½¨Á¢Ê±¼ä´Á
-	_U64  LastActiveTick; //×îºó»î¶¯Ê±¼ä´Á
+	_U64 RecvTotalBytes;  //æ¥æ”¶å­—èŠ‚åˆè®¡
+	_U64 SendTotalBytes;  //å‘é€å­—èŠ‚åˆè®¡
+	struct tm ConnectedDT;  //è¿æ¥å»ºç«‹æ—¶é—´
+	_U64  FirstActiveTick;  //è¿æ¥å»ºç«‹æ—¶é—´æˆ³
+	_U64  LastActiveTick; //æœ€åæ´»åŠ¨æ—¶é—´æˆ³
 } TCPLinkStatics, * PTCPLinkStatics;
 
 typedef struct _SBUF {
@@ -31,21 +31,21 @@ typedef struct _SBUF {
 typedef struct _SOCKET_INFORMATION
 {
 	long			ID;
-	SBUF			SendDataBuf;   //·¢ËÍÊı¾İ»º´æÇø£¨º¬³¤¶È+»º³åÇøµØÖ·£©
-	SBUF			RecvDataBuf;   //½ÓÊÕÊı¾İ»º´æÇø£¨º¬³¤¶È+»º³åÇøµØÖ·£©
-	DWORD			BytesSEND;   //ÆÚÍû·¢ËÍ²Ù×÷·¢ËÍµÄ×Ö½Ú
-	DWORD			BytesRECV;  //ÆÚÍû½ÓÊÕ²Ù×÷µÄ×Ö½Ú
-	bool			bReading;   //true-Õı½ÓÊÕËÍÊı¾İ£¬ÔÚÃ»ÓĞÍê³ÉÉÏ´Î¶ÁÈ¡Ê±ºò£¬²»¿ÉÔÙ´Î¶ÁÈ¡£¨post_recv£©
-	bool			bSending;   //true-ÕıÔÚ·¢ËÍÊı¾İ£¬ÔÚÃ»ÓĞÍê³ÉÉÏ´ÎĞ´µÄÊ±ºò£¬²»¿ÉÔÙ´Î·¢ËÍ£¨post_send£©
-	char			RecvBuffer[DATA_BUFSIZE]; //ÄÚ²¿½ÓÊÕ»º³åÇø
-	char			SendBuffer[DATA_BUFSIZE]; //ÄÚ²¿·¢ËÍ»º³åÇø
+	SBUF			SendDataBuf;   //å‘é€æ•°æ®ç¼“å­˜åŒºï¼ˆå«é•¿åº¦+ç¼“å†²åŒºåœ°å€ï¼‰
+	SBUF			RecvDataBuf;   //æ¥æ”¶æ•°æ®ç¼“å­˜åŒºï¼ˆå«é•¿åº¦+ç¼“å†²åŒºåœ°å€ï¼‰
+	DWORD			BytesSEND;   //æœŸæœ›å‘é€æ“ä½œå‘é€çš„å­—èŠ‚
+	DWORD			BytesRECV;  //æœŸæœ›æ¥æ”¶æ“ä½œçš„å­—èŠ‚
+	bool			bReading;   //true-æ­£æ¥æ”¶é€æ•°æ®ï¼Œåœ¨æ²¡æœ‰å®Œæˆä¸Šæ¬¡è¯»å–æ—¶å€™ï¼Œä¸å¯å†æ¬¡è¯»å–ï¼ˆpost_recvï¼‰
+	bool			bSending;   //true-æ­£åœ¨å‘é€æ•°æ®ï¼Œåœ¨æ²¡æœ‰å®Œæˆä¸Šæ¬¡å†™çš„æ—¶å€™ï¼Œä¸å¯å†æ¬¡å‘é€ï¼ˆpost_sendï¼‰
+	char			RecvBuffer[DATA_BUFSIZE]; //å†…éƒ¨æ¥æ”¶ç¼“å†²åŒº
+	char			SendBuffer[DATA_BUFSIZE]; //å†…éƒ¨å‘é€ç¼“å†²åŒº
 	SOCKET			Socket;
-	bool			bEvent;    //µ±Ç°Á¬½ÓÊÇ·ñÒÑ¾­×¢²áepollÊÂ¼ş
-	_U64			RecvTotalBytes;  //½ÓÊÕ×Ö½ÚºÏ¼Æ
-	_U64			SendTotalBytes;  //·¢ËÍ×Ö½ÚºÏ¼Æ
-	struct tm		ConnectedDT;  //Á¬½Ó½¨Á¢Ê±¼ä
-	_U64			FirstActiveTick;  //Á¬½Ó½¨Á¢Ê±¼ä´Á
-	_U64			LastActiveTick; //×îºó»î¶¯Ê±¼ä´Á
+	bool			bEvent;    //å½“å‰è¿æ¥æ˜¯å¦å·²ç»æ³¨å†Œepolläº‹ä»¶
+	_U64			RecvTotalBytes;  //æ¥æ”¶å­—èŠ‚åˆè®¡
+	_U64			SendTotalBytes;  //å‘é€å­—èŠ‚åˆè®¡
+	struct tm		ConnectedDT;  //è¿æ¥å»ºç«‹æ—¶é—´
+	_U64			FirstActiveTick;  //è¿æ¥å»ºç«‹æ—¶é—´æˆ³
+	_U64			LastActiveTick; //æœ€åæ´»åŠ¨æ—¶é—´æˆ³
 } SOCKET_INFORMATION, * PSOCKET_INFORMATION;
 
 

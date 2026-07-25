@@ -69,10 +69,10 @@ string GetSysDateTimeStr(void) {
 	char buffer[50] = {0};
 	time_t now; 
 	struct tm dt; 
-	time(&now); //timeº¯Êı¶ÁÈ¡ÏÖÔÚµÄÊ±¼ä(¹ú¼Ê±ê×¼Ê±¼ä·Ç±±¾©Ê±¼ä)£¬È»ºó´«Öµ¸ønow
-	//struct tm* dt; //ÊµÀı»¯tm½á¹¹Ö¸Õë
+	time(&now); //timeå‡½æ•°è¯»å–ç°åœ¨çš„æ—¶é—´(å›½é™…æ ‡å‡†æ—¶é—´éåŒ—äº¬æ—¶é—´)ï¼Œç„¶åä¼ å€¼ç»™now
+	//struct tm* dt; //å®ä¾‹åŒ–tmç»“æ„æŒ‡é’ˆ
 	//dt = localtime(&now);
-	localtime_r(&now, &dt);  //Ïß³Ì°²È«°æ±¾
+	localtime_r(&now, &dt);  //çº¿ç¨‹å®‰å…¨ç‰ˆæœ¬
 	string strFormat("[%04d-%02d-%02d %02d:%02d:%02d] ");
 	snprintf(buffer, sizeof(buffer), strFormat.data(), dt.tm_year + 1900, dt.tm_mon + 1, dt.tm_mday, dt.tm_hour,
 		dt.tm_min, dt.tm_sec);
@@ -85,10 +85,10 @@ string GetDateStr()
 	char buffer[50] = { 0 };
 	time_t now;
 	struct tm dt;
-	time(&now); //timeº¯Êı¶ÁÈ¡ÏÖÔÚµÄÊ±¼ä(¹ú¼Ê±ê×¼Ê±¼ä·Ç±±¾©Ê±¼ä)£¬È»ºó´«Öµ¸ønow
-	//struct tm* dt; //ÊµÀı»¯tm½á¹¹Ö¸Õë
+	time(&now); //timeå‡½æ•°è¯»å–ç°åœ¨çš„æ—¶é—´(å›½é™…æ ‡å‡†æ—¶é—´éåŒ—äº¬æ—¶é—´)ï¼Œç„¶åä¼ å€¼ç»™now
+	//struct tm* dt; //å®ä¾‹åŒ–tmç»“æ„æŒ‡é’ˆ
 	//dt = localtime(&now);
-	localtime_r(&now, &dt);  //Ïß³Ì°²È«°æ±¾
+	localtime_r(&now, &dt);  //çº¿ç¨‹å®‰å…¨ç‰ˆæœ¬
 	string strFormat("%04d%02d%02d");
 	snprintf(buffer, sizeof(buffer), strFormat.data(), dt.tm_year + 1900, dt.tm_mon + 1, dt.tm_mday, dt.tm_hour,
 		dt.tm_min, dt.tm_sec);
@@ -127,7 +127,7 @@ char* GetExePath(char* buf, int ibufSize)
 	return buf;
 }
 
-//ÊµÀıÊÇ·ñÒÑ´æÔÚ
+//å®ä¾‹æ˜¯å¦å·²å­˜åœ¨
 bool IsInstanceExists(const char* instName)
 {
 	int  fd;
@@ -147,13 +147,13 @@ bool IsInstanceExists(const char* instName)
 	fl.l_start = 0;
 	fl.l_whence = SEEK_SET;
 	fl.l_len = 0;
-	// ¶ÔÎÄ¼ş½øĞĞ¼ÓËø,Ê§°Ü±íÃ÷ÎÄ¼şÒÑ¾­±»ÆäËû½ø³ÌËøÁË 
+	// å¯¹æ–‡ä»¶è¿›è¡ŒåŠ é”,å¤±è´¥è¡¨æ˜æ–‡ä»¶å·²ç»è¢«å…¶ä»–è¿›ç¨‹é”äº† 
 	if (fcntl(fd, F_SETLK, &fl) == -1) {   
 		//printf("file %s locked. proc already exit!\n", filename);
 		close(fd);
 		return true;
 	}
-	else { //Ã»ÓĞËø£¬¾ÍĞ´ÈëÔËĞĞÊµÀıµÄpid 
+	else { //æ²¡æœ‰é”ï¼Œå°±å†™å…¥è¿è¡Œå®ä¾‹çš„pid 
 		ftruncate(fd, 0);  
 		snprintf(buf, sizeof(buf), "%ld", (long)getpid());
 		write(fd, buf, strlen(buf) + 1);

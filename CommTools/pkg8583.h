@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "CommTools.h"
 
 #define  FIELD_COUNT_MAX  128
 #define  FIELD_DATA_MAX_SIZE  1024

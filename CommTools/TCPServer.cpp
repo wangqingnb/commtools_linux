@@ -20,7 +20,7 @@
 TCPServer::TCPServer(void)
 {
 	LogObj = NULL;
-	m_af = AF_INET;  //Ä¬ÈÏĞ­ÒéÎªIPV4
+	m_af = AF_INET;  //é»˜è®¤åè®®ä¸ºIPV4
 	m_Port = 1018;
 	m_MaxTimeNoActive = 600;
 	m_ServerStarted = false;
@@ -37,11 +37,15 @@ TCPServer::TCPServer(void)
 	strcpy(m_LocalServerIP, "0.0.0.0");
 
 	m_IDCount = 0;
+	m_epfd_tf = -1;
+	m_PendingFreeCount = 0;
+	memset(m_PendingFree, 0, sizeof(m_PendingFree));
 
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 	pthread_mutex_init(&m_mutex, &attr);
+	pthread_mutexattr_destroy(&attr);
 	m_MaxConnectNum = MAX_CONNECT_NUM;
 }
 
@@ -50,6 +54,7 @@ TCPServer::~TCPServer(void)
 {
 	if (m_ServerStarted)
 		StopServer();
+	DrainPendingFree();
 	pthread_mutex_destroy(&m_mutex);
 }
 
@@ -83,11 +88,11 @@ void TCPServer::StartServer()
 	m_TotalRecvBytes = 0;
 	m_TotalSentBytes = 0;
 
-	//Éú³ÉÓÃÓÚ´¦ÀíÊı¾İ´«ÊäÃèÊö·û
+	//ç”Ÿæˆç”¨äºå¤„ç†æ•°æ®ä¼ è¾“æè¿°ç¬¦
 	m_epfd_tf = epoll_create1(0);
 
 
-	//½¨Á¢¼àÌıSocket
+	//å»ºç«‹ç›‘å¬Socket
 	ListenSocket = socket(m_af, SOCK_STREAM, 0);
 	if (ListenSocket < 0)
 	{
@@ -97,10 +102,13 @@ void TCPServer::StartServer()
 		throw CRK_Exception(buf);
 	}
 
-	setsockopt(ListenSocket, SOL_SOCKET, SO_REUSEADDR, 0, 1);
-	//setsockopt(ListenSocket, SO_KEEPALIVE, SO_KEEPALIVE, 0, 1);
+	int reuse = 1;
+	if (setsockopt(ListenSocket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+	{
+		LOG_F("setsockopt(SO_REUSEADDR) failed! %s\n", strerror(errno));
+	}
 
-	//»ñÈ¡·şÎñµØÖ·ĞÅÏ¢
+	//è·å–æœåŠ¡åœ°å€ä¿¡æ¯
 	struct addrinfo hints,*pAddInfo;
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = m_af;
@@ -127,15 +135,15 @@ void TCPServer::StartServer()
 	}
 */
 
-	//°ó¶¨¼àÌıSocket ÖØÊÔ6´Î
+	//ç»‘å®šç›‘å¬Socket é‡è¯•6æ¬¡
 	int iRetry = 1;
 	int iMaxRetry = 6;
 	do {
 		if (bind(ListenSocket, pAddInfo->ai_addr, (int)pAddInfo->ai_addrlen) < 0)
 		{
 			if (iRetry <= iMaxRetry) {
-				LOG_F("bind() failed with error! Code:%d£¬ wait 10 secs! retry times=%d \n", errno, iRetry);
-				usleep(10000 * 1000); //µÈ´ı10Ãë
+				LOG_F("bind() failed with error! Code:%dï¼Œ wait 10 secs! retry times=%d \n", errno, iRetry);
+				usleep(10000 * 1000); //ç­‰å¾…10ç§’
 			} else {
 				close(ListenSocket);
 				LOG_F("bind() failed with error! Code:%d  at %s %d\n", errno, __FILE__, __LINE__);
@@ -157,7 +165,7 @@ void TCPServer::StartServer()
 	}
 	SetNonblocking(ListenSocket);
 
-	//´´½¨AcceptÏß³ÌÓÃÀ´´¦Àí½ÓÊÜÁ¬½Ó½ÓÈë
+	//åˆ›å»ºAcceptçº¿ç¨‹ç”¨æ¥å¤„ç†æ¥å—è¿æ¥æ¥å…¥
 	int ret = pthread_create(&m_AcceptThreadId, NULL, AcceptThread, (void*)this);
 	if (ret != 0)
 	{
@@ -166,7 +174,7 @@ void TCPServer::StartServer()
 		throw CRK_Exception(Msg);
 	}
 	
-	//´´½¨Í¨Ñ¶´«ÊäÏß³ÌÓÃÀ´´¦ÀíÊı¾İ½ÓÊÕºÍ·¢ËÍ
+	//åˆ›å»ºé€šè®¯ä¼ è¾“çº¿ç¨‹ç”¨æ¥å¤„ç†æ•°æ®æ¥æ”¶å’Œå‘é€
 	ret = pthread_create(&m_TransferThreadId, NULL, TransferThread, (void*)this);
 	if (ret != 0)
 	{
@@ -180,116 +188,117 @@ void TCPServer::StartServer()
 
 }
 
-//Êı¾İÊÕ·¢´¦ÀíÏß³Ì
+//æ•°æ®æ”¶å‘å¤„ç†çº¿ç¨‹
 void* TCPServer::TransferThread(void* lpParameter)
 {
-	TCPServer* inst = (TCPServer*)lpParameter;  //Í¨¹ı²ÎÊı»ñÈ¡ÀàÊµÀı
-	int nfds;  //·µ»ØµÄµÈ´ıÊÂ¼şÊıÁ¿
-	struct epoll_event Events[MAX_EPWEVENT_NUM]; //ÉùÃ÷epoll_event½á¹¹ÌåµÄ±äÁ¿Êı×éÓÃÓÚ»Ø´«Òª´¦ÀíµÄÊÂ¼ş
+	TCPServer* inst = (TCPServer*)lpParameter;  //é€šè¿‡å‚æ•°è·å–ç±»å®ä¾‹
+	int nfds;  //è¿”å›çš„ç­‰å¾…äº‹ä»¶æ•°é‡
+	struct epoll_event Events[MAX_EPWEVENT_NUM]; //å£°æ˜epoll_eventç»“æ„ä½“çš„å˜é‡æ•°ç»„ç”¨äºå›ä¼ è¦å¤„ç†çš„äº‹ä»¶
 	
 	while (1)
 	{
+		inst->DrainPendingFree();
 		if (inst->m_Terminated) break;
 		nfds = epoll_wait(inst->m_epfd_tf, Events, MAX_EPWEVENT_NUM, WAIT_TIME_OUT);
 		for (int i = 0; i < nfds; ++i)
 		{
-			//»ñÈ¡socketĞÅÏ¢
+			//è·å–socketä¿¡æ¯
 			PSOCKET_INFORMATION SI = (PSOCKET_INFORMATION)Events[i].data.ptr;
-			//Èç¹û²»ÊÇÓĞĞ§µÄSOCKET_INFORMATION ¾Í²»´¦Àí£¬Ò»°ã³öÏÖÓÚ±»ÆäËû´úÂëÇ¿ÖÆÖÃÎªÎŞĞ§
+			//å¦‚æœä¸æ˜¯æœ‰æ•ˆçš„SOCKET_INFORMATION å°±ä¸å¤„ç†ï¼Œä¸€èˆ¬å‡ºç°äºè¢«å…¶ä»–ä»£ç å¼ºåˆ¶ç½®ä¸ºæ— æ•ˆ
 			if (SI == NULL) 
 				continue;
 
-			//ÊÕµ½¶Ô·½¹Ø±ÕÁ¬½ÓÊÂ¼ş£¬¹Ø±Õµ±Ç°Á¬½Ó
+			//æ”¶åˆ°å¯¹æ–¹å…³é—­è¿æ¥äº‹ä»¶ï¼Œå…³é—­å½“å‰è¿æ¥
 			if (Events[i].events & EPOLLHUP || Events[i].events & EPOLLRDHUP) {
 				inst->CloseConnect(SI->ID);
-				SI = NULL; //ÖÃÎªÎŞĞ§
+				SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 				continue;;
 			} 
-			if (Events[i].events & EPOLLIN)//ÊÕµ½Êı¾İ£¬ÄÇÃ´½øĞĞ¶ÁÈë¡£
+			if (Events[i].events & EPOLLIN)//æ”¶åˆ°æ•°æ®ï¼Œé‚£ä¹ˆè¿›è¡Œè¯»å…¥ã€‚
 			{
-				if (!SI->bReading)  //µ±Ç°²»Îª¶ÁÈ¡×´Ì¬¾Í´¦ÀíÏÂÒ»¸öÊÂ¼ş
+				if (!SI->bReading)  //å½“å‰ä¸ä¸ºè¯»å–çŠ¶æ€å°±å¤„ç†ä¸‹ä¸€ä¸ªäº‹ä»¶
 					continue;
 
-				//Êı¾İ»º³åÇøµÄ½ÓÊÕÊı¾İµÄÎ»ÖÃ
+				//æ•°æ®ç¼“å†²åŒºçš„æ¥æ”¶æ•°æ®çš„ä½ç½®
 				char* pBaseAddr = SI->RecvDataBuf.buf;  
 				
-				//ÆÚÍû»ñÈ¡µÄÊı¾İ×Ö½ÚÊı
+				//æœŸæœ›è·å–çš„æ•°æ®å­—èŠ‚æ•°
 				long ExpRecvNum = SI->BytesRECV;  
 				
-				//Ã¿´Îµ÷ÓÃrecv·µ»ØµÄ·µ»ØÊÕµ½µÄÊı¾İ×Ö½ÚÊı
+				//æ¯æ¬¡è°ƒç”¨recvè¿”å›çš„è¿”å›æ”¶åˆ°çš„æ•°æ®å­—èŠ‚æ•°
 				long recvNum = 0;  
-				//ÒÑ¶ÁÈ¡µÄ×Ö½Ú×ÜÊı
+				//å·²è¯»å–çš„å­—èŠ‚æ€»æ•°
 				long recvNumTotal = 0;
-				long iOffset = 0;  //»º´æÇøµÄÆ«ÒÆÁ¿
+				long iOffset = 0;  //ç¼“å­˜åŒºçš„åç§»é‡
 
-				//±¾´Î¶ÁÊı¾İÊÇ·ñÍê³É£¬ÓĞÁ½ÖÖÇé¿ö£¬1ÊÇÍê³É¶ÁÈ¡ÆÚ´ıµÄÊı¾İÁ¿£¬2ÊÇµ±Ç°Ã»ÓĞ¸ü¶àµÄÊı¾İ¿É¶Á
+				//æœ¬æ¬¡è¯»æ•°æ®æ˜¯å¦å®Œæˆï¼Œæœ‰ä¸¤ç§æƒ…å†µï¼Œ1æ˜¯å®Œæˆè¯»å–æœŸå¾…çš„æ•°æ®é‡ï¼Œ2æ˜¯å½“å‰æ²¡æœ‰æ›´å¤šçš„æ•°æ®å¯è¯»
 				bool bReadCompleted = false;
-				//¿ªÊ¼¶ÁÈ¡Êı¾İ
+				//å¼€å§‹è¯»å–æ•°æ®
 				while (1)
 				{
 					recvNum = recv(SI->Socket, pBaseAddr + iOffset, ExpRecvNum, 0);
-					//¶ÁÈ¡Ê§°Ü°´·µ»ØÂë½øĞĞÏàÓ¦´¦Àí
+					//è¯»å–å¤±è´¥æŒ‰è¿”å›ç è¿›è¡Œç›¸åº”å¤„ç†
 					if (recvNum < 0)
 					{
 						if (errno == EAGAIN)
 						{
-							// µ±errnoÎªEAGAINÊ±,±íÊ¾µ±Ç°»º³åÇøÒÑÎŞÊı¾İ¿É¶Á,¾ÍÍê³É±¾´Î¶Á
+							// å½“errnoä¸ºEAGAINæ—¶,è¡¨ç¤ºå½“å‰ç¼“å†²åŒºå·²æ— æ•°æ®å¯è¯»,å°±å®Œæˆæœ¬æ¬¡è¯»
 							bReadCompleted = true;
-							SI->RecvDataBuf.len = recvNumTotal;  //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+							SI->RecvDataBuf.len = recvNumTotal;  //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 							break;
 						}
 						else if (errno == ECONNRESET)
 						{
-							// ¶Ô·½·¢ËÍÁËRST
+							// å¯¹æ–¹å‘é€äº†RST
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //ÖÃÎªÎŞĞ§
+							SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 							break;
 						}
 						else if (errno == EINTR)
 						{
-							// ±»ĞÅºÅÖĞ¶ÏµÈ´ı10ºÁÃëÖØĞÂÔÙ¶ÁÈ¡
+							// è¢«ä¿¡å·ä¸­æ–­ç­‰å¾…10æ¯«ç§’é‡æ–°å†è¯»å–
 							usleep(10 * 1000);
 							continue;
 						}
 						else
 						{
-							//ÆäËû²»¿ÉÃÖ²¹µÄ´íÎó£¬ÈçÏßÂ·Òì³£ÖĞ¶ÏµÈ
+							//å…¶ä»–ä¸å¯å¼¥è¡¥çš„é”™è¯¯ï¼Œå¦‚çº¿è·¯å¼‚å¸¸ä¸­æ–­ç­‰
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //ÖÃÎªÎŞĞ§
+							SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 							break;
 						}
 					}
 					else if (recvNum == 0)
 					{
-						// ÕâÀï±íÊ¾¶Ô¶ËµÄsocketÒÑÕı³£¹Ø±Õ.·¢ËÍ¹ıFINÁË¡£
+						// è¿™é‡Œè¡¨ç¤ºå¯¹ç«¯çš„socketå·²æ­£å¸¸å…³é—­.å‘é€è¿‡FINäº†ã€‚
 						inst->CloseConnect(SI->ID);
-						SI = NULL; //ÖÃÎªÎŞĞ§
+						SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 						break;
 					}
 
-					//ÏÂÃæÊÇ¶ÁÈ¡µ½Êı¾İºóµÄ´¦Àí
+					//ä¸‹é¢æ˜¯è¯»å–åˆ°æ•°æ®åçš„å¤„ç†
 					
-					recvNumTotal += recvNum; //ÀÛ¼ÆÒÑ¶ÁµÄÊı¾İÁ¿
+					recvNumTotal += recvNum; //ç´¯è®¡å·²è¯»çš„æ•°æ®é‡
 					ExpRecvNum -= recvNum;
-					//ÒÑ¾­Íê³ÉÆÚÍû¶ÁÈ¡µÄÊı¾İ¾Í²»¼ÌĞø¶ÁÈ¡
+					//å·²ç»å®ŒæˆæœŸæœ›è¯»å–çš„æ•°æ®å°±ä¸ç»§ç»­è¯»å–
 					if (ExpRecvNum == 0)
 					{
-						SI->RecvDataBuf.len = recvNumTotal; //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+						SI->RecvDataBuf.len = recvNumTotal; //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 						bReadCompleted = true;
 						break; 
 					}
-					else //Ã»ÓĞÍê³É¶ÁÈ¡ÆÚ´ı³¤¶ÈµÄÊı¾İ¾Í¼ÌĞø¶Á
+					else //æ²¡æœ‰å®Œæˆè¯»å–æœŸå¾…é•¿åº¦çš„æ•°æ®å°±ç»§ç»­è¯»
 					{
 						iOffset += recvNum;
-						continue;   // ĞèÒªÔÙ´Î¶ÁÈ¡
+						continue;   // éœ€è¦å†æ¬¡è¯»å–
 					}
 				}
-				__sync_add_and_fetch(&inst->m_TotalRecvBytes, recvNumTotal);  //¸üĞÂµ±Ç°Á¬½Ó×Ü½ÓÊÕ×Ö½ÚÊıĞÅÏ¢
+				__sync_add_and_fetch(&inst->m_TotalRecvBytes, recvNumTotal);  //æ›´æ–°å½“å‰è¿æ¥æ€»æ¥æ”¶å­—èŠ‚æ•°ä¿¡æ¯
 				if (SI) {
-					SI->LastActiveTick = GetTickCount64();  //¸üĞÂÁ¬½ÓµÄ×îºó»î¶¯Ê±¼ä´Á
-					SI->bReading = false;  //ÉèÖÃµ±Ç°×´Ì¬ÎªÎ´ÔÚ¶ÁÈ¡
+					SI->LastActiveTick = GetTickCount64();  //æ›´æ–°è¿æ¥çš„æœ€åæ´»åŠ¨æ—¶é—´æˆ³
+					SI->bReading = false;  //è®¾ç½®å½“å‰çŠ¶æ€ä¸ºæœªåœ¨è¯»å–
 
-					//´¦ÀíÒÑ×¢²áµÄ½ÓÊÕ³É¹¦»Øµ÷º¯Êı
+					//å¤„ç†å·²æ³¨å†Œçš„æ¥æ”¶æˆåŠŸå›è°ƒå‡½æ•°
 					if (bReadCompleted && inst->m_OnRecvCompleted)
 					{
 						inst->m_OnRecvCompleted(SI->ID, SI->RecvDataBuf.buf, SI->RecvDataBuf.len,
@@ -299,73 +308,73 @@ void* TCPServer::TransferThread(void* lpParameter)
 				else
 					continue;
 			}
-			if (Events[i].events & EPOLLOUT)//ÊÕµ½¿ÉÒÔ·¢ËÍÊı¾İµÄÊÂ¼ş£¬ÄÇÃ´½øĞĞ·¢ËÍ¡£
+			if (Events[i].events & EPOLLOUT)//æ”¶åˆ°å¯ä»¥å‘é€æ•°æ®çš„äº‹ä»¶ï¼Œé‚£ä¹ˆè¿›è¡Œå‘é€ã€‚
 			{
 				if (!SI->bSending)
 					continue;
-				//Êı¾İ»º³åÇøµÄ·¢ËÍÊı¾İµÄÎ»ÖÃ
+				//æ•°æ®ç¼“å†²åŒºçš„å‘é€æ•°æ®çš„ä½ç½®
 				char* pBaseAddr = SI->SendDataBuf.buf;
 
-				//ÆÚÍû»ñÈ¡µÄÊı¾İ×Ö½ÚÊı
+				//æœŸæœ›è·å–çš„æ•°æ®å­—èŠ‚æ•°
 				long ExpSendNum = SI->BytesSEND;
 
-				//Ã¿´Îµ÷ÓÃsend·¢Éú³É¹¦µÄÊı¾İ×Ö½ÚÊı
+				//æ¯æ¬¡è°ƒç”¨sendå‘ç”ŸæˆåŠŸçš„æ•°æ®å­—èŠ‚æ•°
 				long sendNum = 0;
 				
-				//ÒÑ·¢ËÍµÄ×Ö½Ú×ÜÊı
+				//å·²å‘é€çš„å­—èŠ‚æ€»æ•°
 				long sendNumTotal = 0;
-				long iOffset = 0;  //»º´æÇøµÄÆ«ÒÆÁ¿
+				long iOffset = 0;  //ç¼“å­˜åŒºçš„åç§»é‡
 
-				//±¾´Î·¢ËÍÊı¾İÊÇ·ñÍê³É£¬ÓĞÁ½ÖÖÇé¿ö£¬1ÊÇÍê³É·¢ËÍÆÚ´ıµÄÊı¾İÁ¿£¬2ÊÇµ±Ç°·¢ËÍ»º³åÒÑÂú²»ÄÜ·¢ËÍ³öÈ¥
+				//æœ¬æ¬¡å‘é€æ•°æ®æ˜¯å¦å®Œæˆï¼Œæœ‰ä¸¤ç§æƒ…å†µï¼Œ1æ˜¯å®Œæˆå‘é€æœŸå¾…çš„æ•°æ®é‡ï¼Œ2æ˜¯å½“å‰å‘é€ç¼“å†²å·²æ»¡ä¸èƒ½å‘é€å‡ºå»
 				bool bSendCompleted = false;
 				
-				//¿ªÊ¼·¢ËÍÊı¾İ
+				//å¼€å§‹å‘é€æ•°æ®
 				while (1) {
 					sendNum = send(SI->Socket, pBaseAddr + iOffset, ExpSendNum, 0);
-					//·¢ËÍÊ§°Ü°´·µ»ØÂë½øĞĞÏàÓ¦´¦Àí
+					//å‘é€å¤±è´¥æŒ‰è¿”å›ç è¿›è¡Œç›¸åº”å¤„ç†
 					if (sendNum < 0)
 					{
 						if (errno == EAGAIN)
 						{
-							// µ±errnoÎªEAGAINÊ±,±íÊ¾µ±Ç°»º³åÇøÂú,¾ÍÍê³É±¾´Î·¢ËÍ
+							// å½“errnoä¸ºEAGAINæ—¶,è¡¨ç¤ºå½“å‰ç¼“å†²åŒºæ»¡,å°±å®Œæˆæœ¬æ¬¡å‘é€
 							bSendCompleted = true;
-							SI->SendDataBuf.len = sendNumTotal;  //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+							SI->SendDataBuf.len = sendNumTotal;  //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 							break;
 						}
 						else if (errno == ECONNRESET)
 						{
-							// ¶Ô·½·¢ËÍÁËRST
+							// å¯¹æ–¹å‘é€äº†RST
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //ÖÃÎªÎŞĞ§
+							SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 							break;
 						}
 						else if (errno == EINTR)
 						{
-							// ±»ĞÅºÅÖĞ¶ÏÖØĞÂÔÙ·¢ËÍ
+							// è¢«ä¿¡å·ä¸­æ–­é‡æ–°å†å‘é€
 							continue;
 						}
 						else
 						{
-							//ÆäËû²»¿ÉÃÖ²¹µÄ´íÎó
+							//å…¶ä»–ä¸å¯å¼¥è¡¥çš„é”™è¯¯
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //ÖÃÎªÎŞĞ§
+							SI = NULL; //ç½®ä¸ºæ— æ•ˆ
 							break;
 						}
 					}
-					//ÏÂÃæÊÇ·¢ËÍÊı¾İ³É¹¦ºóµÄ´¦Àí
-					sendNumTotal += sendNum; //ÀÛ¼ÆÒÑ·¢ËÍµÄÊı¾İÁ¿
+					//ä¸‹é¢æ˜¯å‘é€æ•°æ®æˆåŠŸåçš„å¤„ç†
+					sendNumTotal += sendNum; //ç´¯è®¡å·²å‘é€çš„æ•°æ®é‡
 					ExpSendNum -= sendNum;
-					//ÒÑ¾­Íê³ÉÆÚÍû·¢ËÍµÄÊı¾İ¾Í²»¼ÌĞø¶ÁÈ¡
+					//å·²ç»å®ŒæˆæœŸæœ›å‘é€çš„æ•°æ®å°±ä¸ç»§ç»­è¯»å–
 					if (ExpSendNum == 0)
 					{
-						SI->SendDataBuf.len = sendNumTotal; //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+						SI->SendDataBuf.len = sendNumTotal; //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 						bSendCompleted = true;
 						break;
 					}
-					else //·¢ËÍÃ»ÓĞ´ïµ½ÆÚ´ı³¤¶ÈµÄÊı¾İ¾Í¼ÌĞø·¢
+					else //å‘é€æ²¡æœ‰è¾¾åˆ°æœŸå¾…é•¿åº¦çš„æ•°æ®å°±ç»§ç»­å‘
 					{
 						iOffset += sendNum;
-						continue;   // ĞèÒªÔÙ´Î·¢ËÍ
+						continue;   // éœ€è¦å†æ¬¡å‘é€
 					}
 				}
 				__sync_add_and_fetch(&inst->m_TotalSentBytes, sendNumTotal);
@@ -389,21 +398,21 @@ void* TCPServer::TransferThread(void* lpParameter)
 void* TCPServer::AcceptThread(void* lpParameter)
 {
 	TCPServer* inst = (TCPServer*)lpParameter;
-	int nfds;  //·µ»ØµÄµÈ´ıÊÂ¼şÊıÁ¿
+	int nfds;  //è¿”å›çš„ç­‰å¾…äº‹ä»¶æ•°é‡
 	
-	struct epoll_event Events[MAX_EPWEVENT_NUM]; //ÉùÃ÷epoll_event½á¹¹ÌåµÄ±äÁ¿Êı×éÓÃÓÚ»Ø´«Òª´¦ÀíµÄÊÂ¼ş
+	struct epoll_event Events[MAX_EPWEVENT_NUM]; //å£°æ˜epoll_eventç»“æ„ä½“çš„å˜é‡æ•°ç»„ç”¨äºå›ä¼ è¦å¤„ç†çš„äº‹ä»¶
 
-	struct epoll_event ev;  //evÓÃÓÚ×¢²áÊÂ¼ş
+	struct epoll_event ev;  //evç”¨äºæ³¨å†Œäº‹ä»¶
 
-	//Éú³ÉÓÃÓÚ´¦ÀíacceptµÄepoll×¨ÓÃµÄÎÄ¼şÃèÊö·û
+	//ç”Ÿæˆç”¨äºå¤„ç†acceptçš„epollä¸“ç”¨çš„æ–‡ä»¶æè¿°ç¬¦
 	int epfd = epoll_create1(0);
 
-	//ÉèÖÃÓëÒª´¦ÀíµÄÊÂ¼şÏà¹ØµÄÎÄ¼şÃèÊö·û
+	//è®¾ç½®ä¸è¦å¤„ç†çš„äº‹ä»¶ç›¸å…³çš„æ–‡ä»¶æè¿°ç¬¦
 	ev.data.fd = inst->ListenSocket;
-	//ÉèÖÃÒª´¦ÀíµÄÊÂ¼şÀàĞÍ
+	//è®¾ç½®è¦å¤„ç†çš„äº‹ä»¶ç±»å‹
 	ev.events = EPOLLIN | EPOLLET;
 
-	//×¢²áepollÊÂ¼ş
+	//æ³¨å†Œepolläº‹ä»¶
 	epoll_ctl(epfd, EPOLL_CTL_ADD, inst->ListenSocket, &ev);
 	
 	struct sockaddr_in clientaddr;
@@ -414,7 +423,7 @@ void* TCPServer::AcceptThread(void* lpParameter)
 		nfds = epoll_wait(epfd, Events, MAX_EPWEVENT_NUM, WAIT_TIME_OUT);
 		for (int i = 0; i < nfds; ++i)
 		{
-			//Èç¹ûĞÂ¼à²âµ½Ò»¸öSOCKETÓÃ»§Á¬½Óµ½ÁË°ó¶¨µÄSOCKET¶Ë¿Ú£¬½¨Á¢ĞÂµÄÁ¬½Ó¡£
+			//å¦‚æœæ–°ç›‘æµ‹åˆ°ä¸€ä¸ªSOCKETç”¨æˆ·è¿æ¥åˆ°äº†ç»‘å®šçš„SOCKETç«¯å£ï¼Œå»ºç«‹æ–°çš„è¿æ¥ã€‚
 			if (Events[i].data.fd == inst->ListenSocket)
 			{
 				SOCKET connfd = accept(inst->ListenSocket, (sockaddr*)&clientaddr, &clilen);
@@ -430,7 +439,7 @@ void* TCPServer::AcceptThread(void* lpParameter)
 					close(connfd);
 					continue;
 				}
-				//±£´æSocketÏà¹ØĞÅÏ¢
+				//ä¿å­˜Socketç›¸å…³ä¿¡æ¯
 				pthread_mutex_lock(&inst->m_mutex);
 				inst->m_ConnTotal++;
 				inst->SocketArray[inst->m_ConnTotal] = PSOCKET_INFORMATION(malloc(sizeof(SOCKET_INFORMATION)));
@@ -439,6 +448,7 @@ void* TCPServer::AcceptThread(void* lpParameter)
 					LOG_SF("SocketArray: malloc() failed with error! ,%s\n", strerror(errno));
 					inst->m_ConnTotal--;
 					pthread_mutex_unlock(&inst->m_mutex);
+					close(connfd);
 					break;
 				}
 
@@ -467,21 +477,21 @@ void* TCPServer::AcceptThread(void* lpParameter)
 			}
 		}
 	}
-	close(epfd);  //¹Ø±ÕepollÃèÊö·û
+	close(epfd);  //å…³é—­epollæè¿°ç¬¦
 	sleep(1);
 	return 0;
 }
 
-//ÖØĞÂ´¥·¢epollÊÂ¼ş
+//é‡æ–°è§¦å‘epolläº‹ä»¶
 void TCPServer::ReTriggerEvent(PSOCKET_INFORMATION SI)
 {
-	struct epoll_event ev;  //evÓÃÓÚ×¢²áÊÂ¼ş
+	struct epoll_event ev;  //evç”¨äºæ³¨å†Œäº‹ä»¶
 	ev.data.ptr = SI;
 	
 	int op = SI->bEvent ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 	SI->bEvent = true;
 
-	//ÉèÖÃÓÃ²Ù×÷ÊÂ¼ş
+	//è®¾ç½®ç”¨æ“ä½œäº‹ä»¶
 	ev.events = EPOLLIN | EPOLLOUT| EPOLLET | EPOLLHUP | EPOLLRDHUP;
 	if (epoll_ctl(m_epfd_tf, op, SI->Socket, &ev) < 0) 
 	{
@@ -513,21 +523,21 @@ bool TCPServer::PostRecv(long ConnectID, char* buf, DWORD len)
 
 	PSOCKET_INFORMATION SI;
 	SI = SocketArray[idx];
-	//µ±socketĞÅÏ¢ÎŞĞ§
+	//å½“socketä¿¡æ¯æ— æ•ˆ
 	if (SI == NULL) {
 		errno = ENODATA;
 		pthread_mutex_unlock(&m_mutex);
 		return false;
 	}
 
-	//Ç°ÃæÁ¬½ÓµÄ¶ÁÈ¡²Ù×÷Ã»ÓĞÍê³ÉÊÇ²»ÔÊĞíÔÙ´ÎÍ¶µİ¶ÁÈ¡²Ù×÷
+	//å‰é¢è¿æ¥çš„è¯»å–æ“ä½œæ²¡æœ‰å®Œæˆæ˜¯ä¸å…è®¸å†æ¬¡æŠ•é€’è¯»å–æ“ä½œ
 	if (SI->bReading) {
 		errno = EAGAIN;
 		pthread_mutex_unlock(&m_mutex);
 		return false;
 	}
 
-	if (buf == NULL)  //Ê¹ÓÃÄÚ²¿»º³åÇø
+	if (buf == NULL)  //ä½¿ç”¨å†…éƒ¨ç¼“å†²åŒº
 	{
 		if (len > MAX_PKG_LEN)
 		{
@@ -542,7 +552,7 @@ bool TCPServer::PostRecv(long ConnectID, char* buf, DWORD len)
 	SI->RecvDataBuf.len = 0;
     SI->BytesRECV = len;
 	
-	SI->bReading = true;   //ÉèÖÃµ±Ç°×´Ì¬ÎªÕıÔÚ¶ÁÈ¡
+	SI->bReading = true;   //è®¾ç½®å½“å‰çŠ¶æ€ä¸ºæ­£åœ¨è¯»å–
 
 	ReTriggerEvent(SI);
 	pthread_mutex_unlock(&m_mutex);
@@ -559,7 +569,7 @@ bool TCPServer::PostSend(long ConnectID, char* buf, DWORD len)
 		return false;
 	}
 
-	//·¢ËÍµÄÊı¾İ´óÓÚÄÚÖÃ»º³å´óĞ¡
+	//å‘é€çš„æ•°æ®å¤§äºå†…ç½®ç¼“å†²å¤§å°
 	if (len > DATA_BUFSIZE) {
 		errno = EINVAL;
 		return false;
@@ -578,14 +588,14 @@ bool TCPServer::PostSend(long ConnectID, char* buf, DWORD len)
 	PSOCKET_INFORMATION SI;
 	SI = SocketArray[idx];
 
-	//socketĞÅÏ¢ÎŞĞ§
+	//socketä¿¡æ¯æ— æ•ˆ
 	if (SI == NULL) {
 		pthread_mutex_unlock(&m_mutex);
 		errno = ENODATA;
 		return false;
 	}
 	
-	//Ç°ÃæÁ¬½ÓµÄ·¢ËÍ²Ù×÷Ã»ÓĞÍê³ÉÊÇ²»ÔÊĞíÔÙ´ÎÍ¶µİ·¢ËÍ²Ù×÷
+	//å‰é¢è¿æ¥çš„å‘é€æ“ä½œæ²¡æœ‰å®Œæˆæ˜¯ä¸å…è®¸å†æ¬¡æŠ•é€’å‘é€æ“ä½œ
 	if (SI->bSending) {
 		pthread_mutex_unlock(&m_mutex);
 		errno = EAGAIN;
@@ -596,11 +606,26 @@ bool TCPServer::PostSend(long ConnectID, char* buf, DWORD len)
 	SI->BytesSEND = len;
 	memcpy(SI->SendBuffer, buf, len);
 	SI->SendDataBuf.buf = SI->SendBuffer;
-	SI->bSending = true;   //ÉèÖÃµ±Ç°×´Ì¬ÎªÕıÔÚ·¢ËÍ
+	SI->bSending = true;   //è®¾ç½®å½“å‰çŠ¶æ€ä¸ºæ­£åœ¨å‘é€
 
 	ReTriggerEvent(SI);
 	pthread_mutex_unlock(&m_mutex);
 	return true;
+}
+
+void TCPServer::DrainPendingFree()
+{
+	pthread_mutex_lock(&m_mutex);
+	for (WORD i = 0; i < m_PendingFreeCount; i++)
+	{
+		if (m_PendingFree[i] != NULL)
+		{
+			free(m_PendingFree[i]);
+			m_PendingFree[i] = NULL;
+		}
+	}
+	m_PendingFreeCount = 0;
+	pthread_mutex_unlock(&m_mutex);
 }
 
 void TCPServer::CloseConnect(long ConnectID)
@@ -620,25 +645,40 @@ void TCPServer::CloseConnect(long ConnectID)
 	if (m_OnDisconnected != NULL)
 		m_OnDisconnected(tmpID, RegOnDisconnectedClass);
 
-	close(SI->Socket);
-	//SI->Socket = 0;
-	free(SI);
+	if (SI->bEvent && SI->Socket >= 0 && m_epfd_tf >= 0)
+	{
+		epoll_ctl(m_epfd_tf, EPOLL_CTL_DEL, SI->Socket, NULL);
+		SI->bEvent = false;
+	}
+	if (SI->Socket >= 0)
+	{
+		close(SI->Socket);
+		SI->Socket = -1;
+	}
 
 	long i = Index;
 	while (i <= m_ConnTotal)
 	{
-		if (i == m_ConnTotal)  //×îºóÒ»¸öÔªËØ
+		if (i == m_ConnTotal)
 		{
-			SocketArray[i] = NULL;  //ÖÃ¿Õ
+			SocketArray[i] = NULL;
 		}
 		else
 		{
-			SocketArray[i] = SocketArray[i + 1];  //ÏòÇ°ÒÆ¶¯Ò»¸öÔªËØ
+			SocketArray[i] = SocketArray[i + 1];
 		}
 		i++;
 	}
 	m_ConnTotal--;
-	
+
+	if (m_PendingFreeCount < MAX_CONNECT_NUM + 1)
+	{
+		m_PendingFree[m_PendingFreeCount++] = SI;
+	}
+	else
+	{
+		free(SI);
+	}
 
 	pthread_mutex_unlock(&m_mutex);
 
@@ -670,7 +710,7 @@ void TCPServer::StopServer()
 	{
 		m_Terminated = true;
 
-		//µÈ´ıÏß³Ì½áÊø
+		//ç­‰å¾…çº¿ç¨‹ç»“æŸ
 		if (pthread_join(m_TransferThreadId, NULL) != 0) {
 			LOG_F("TransferThread join failed!\n");
 		}
@@ -678,7 +718,7 @@ void TCPServer::StopServer()
 			LOG_F("TransferThread was finished!\n");
 		}
 
-		//µÈ´ıÏß³Ì½áÊø
+		//ç­‰å¾…çº¿ç¨‹ç»“æŸ
 		if (pthread_join(m_AcceptThreadId, NULL) != 0) {
 			LOG_F("AcceptThread join failed!\n");
 		}
@@ -688,9 +728,10 @@ void TCPServer::StopServer()
 
 
 		close(m_epfd_tf);
-		
+		m_epfd_tf = -1;
+		DrainPendingFree();
 
-		//¹Ø±Õ¼àÌısocket
+		//å…³é—­ç›‘å¬socket
 		shutdown(ListenSocket, SHUT_RDWR);
 		close(ListenSocket);
 		LOG_F("listener socket is closed!\n");

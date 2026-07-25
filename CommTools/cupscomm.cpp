@@ -42,7 +42,7 @@ TCupsCOMM::~TCupsCOMM()
 {
 	m_Terminated = true;
 
-	//等待线程结束
+	//绛夊緟绾跨▼缁撴潫
 	if (pthread_join(m_ThreadId, NULL) != 0) {
 		LOG("WorkerThread join failed!");
 	}

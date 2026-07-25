@@ -45,8 +45,9 @@ TCPClient::TCPClient(void)
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 	pthread_mutex_init(&m_mutex, &attr);
+	pthread_mutexattr_destroy(&attr);
 
-	//Éú³ÉÓÃÓÚ´¦ÀíÊı¾İ´«ÊäÃèÊö·û
+	//ç”Ÿæˆç”¨äºå¤„ç†æ•°æ®ä¼ è¾“æè¿°ç¬¦
 	m_epfd = epoll_create1(0);
 
 	int ret = pthread_create(&m_ThreadId, NULL, WorkerThread, (void*)this);
@@ -64,10 +65,10 @@ TCPClient::~TCPClient(void)
 {
 	m_Terminated = true;
 	m_ConnectStatus = TS_NOTCONNECT;
-	//µÈ´ıÏß³Ì½áÊø
+	//ç­‰å¾…çº¿ç¨‹ç»“æŸ
 
 
-   //µÈ´ıÏß³Ì½áÊø
+   //ç­‰å¾…çº¿ç¨‹ç»“æŸ
 	if (pthread_join(m_ThreadId, NULL) != 0) {
 		LOG("WorkerThread join failed!");
 	}
@@ -105,7 +106,7 @@ bool TCPClient::Connect()
 	m_ConnectStatus = TS_CONNECTING;
 
 	//char Msg[MAX_MSG_SIZE];
-	//½¨Á¢Socket
+	//å»ºç«‹Socket
 	memset(&SocketInfo, 0, sizeof(SOCKET_INFORMATION));
 	SocketInfo.Socket = socket(AF_INET, SOCK_STREAM, 0);
 	if (SocketInfo.Socket < 0)
@@ -165,7 +166,7 @@ void TCPClient::Disconnect()
 {
 	if (m_ConnectStatus == TS_CONNECTED)
 	{
-		LOG("Connect Closed£¡\n");
+		LOG("Connect Closedï¼\n");
 		CloseConnect();
 		if (m_OnDisconnected != NULL)
 			m_OnDisconnected(RegOnDisconnectedClass);
@@ -174,16 +175,16 @@ void TCPClient::Disconnect()
 }
 
 
-//ÖØĞÂ´¥·¢epollÊÂ¼ş
+//é‡æ–°è§¦å‘epolläº‹ä»¶
 void TCPClient::ReTriggerEvent(PSOCKET_INFORMATION SI)
 {
-	struct epoll_event ev;  //evÓÃÓÚ×¢²áÊÂ¼ş
+	struct epoll_event ev;  //evç”¨äºæ³¨å†Œäº‹ä»¶
 	//ev.data.ptr = SI;
 
 	int op = SI->bEvent ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 	SI->bEvent = true;
 
-	//ÉèÖÃÓÃ²Ù×÷ÊÂ¼ş
+	//è®¾ç½®ç”¨æ“ä½œäº‹ä»¶
 	ev.events = EPOLLIN | EPOLLOUT | EPOLLET | EPOLLHUP | EPOLLRDHUP;
 	if (epoll_ctl(m_epfd, op, SI->Socket, &ev) < 0)
 	{
@@ -202,14 +203,16 @@ bool TCPClient::PostRecv(char* buf, DWORD len)
 	}
 
 
-	//µ±socketĞÅÏ¢ÎŞĞ§»òÇ°ÃæÁ¬½ÓµÄ½ÓÊÕ²Ù×÷Ã»ÓĞÍê³ÉÊÇ²»ÔÊĞíÔÙ´ÎÍ¶µİ½ÓÊÕ²Ù×÷
+	//å½“socketä¿¡æ¯æ— æ•ˆæˆ–å‰é¢è¿æ¥çš„æ¥æ”¶æ“ä½œæ²¡æœ‰å®Œæˆæ˜¯ä¸å…è®¸å†æ¬¡æŠ•é€’æ¥æ”¶æ“ä½œ
 	if (SocketInfo.Socket == -1 || SocketInfo.bReading) return false;
 	
 	pthread_mutex_lock(&m_mutex);
-	if (buf == NULL)  //Ê¹ÓÃÄÚ²¿»º³åÇø
+	if (buf == NULL)  //ä½¿ç”¨å†…éƒ¨ç¼“å†²åŒº
 	{
 		if (len > MAX_PKG_LEN)
 		{
+			pthread_mutex_unlock(&m_mutex);
+			errno = EOVERFLOW;
 			return false;
 		}
 		SocketInfo.RecvDataBuf.buf = SocketInfo.RecvBuffer;
@@ -217,7 +220,7 @@ bool TCPClient::PostRecv(char* buf, DWORD len)
 	else
 		SocketInfo.RecvDataBuf.buf = buf;
 	SocketInfo.RecvDataBuf.len = 0;  
-	SocketInfo.BytesRECV = len; //ÆÚ´ı½ÓÊÕµÄ×Ö½Ú³¤¶È
+	SocketInfo.BytesRECV = len; //æœŸå¾…æ¥æ”¶çš„å­—èŠ‚é•¿åº¦
 	SocketInfo.bReading = true;
 	ReTriggerEvent(&SocketInfo);
 	pthread_mutex_unlock(&m_mutex);
@@ -232,7 +235,7 @@ bool TCPClient::PostSend(char* buf, DWORD len)
 		return false;
 	}
 
-	//µ±socketĞÅÏ¢ÎŞĞ§»òÇ°ÃæÁ¬½ÓµÄ·¢ËÍ²Ù×÷Ã»ÓĞÍê³ÉÊÇ²»ÔÊĞíÔÙ´ÎÍ¶µİ·¢ËÍ²Ù×÷
+	//å½“socketä¿¡æ¯æ— æ•ˆæˆ–å‰é¢è¿æ¥çš„å‘é€æ“ä½œæ²¡æœ‰å®Œæˆæ˜¯ä¸å…è®¸å†æ¬¡æŠ•é€’å‘é€æ“ä½œ
 	if (SocketInfo.Socket == -1)  
 	{
 		errno = ECONNABORTED;
@@ -244,7 +247,7 @@ bool TCPClient::PostSend(char* buf, DWORD len)
 		return false;
 	}
 	
-	//·¢ËÍµÄÊı¾İ´óÓÚÄÚÖÃ»º³å´óĞ¡
+	//å‘é€çš„æ•°æ®å¤§äºå†…ç½®ç¼“å†²å¤§å°
 	if (len > DATA_BUFSIZE) {
 		errno = EINVAL;
 		return false;
@@ -254,7 +257,7 @@ bool TCPClient::PostSend(char* buf, DWORD len)
 	memcpy(SocketInfo.SendBuffer, buf, len);
 	SocketInfo.SendDataBuf.buf = SocketInfo.SendBuffer;
 	SocketInfo.SendDataBuf.len = 0;
-	SocketInfo.BytesSEND = len; //ÆÚ´ı·¢ËÍµÄ×Ö½Ú³¤¶È
+	SocketInfo.BytesSEND = len; //æœŸå¾…å‘é€çš„å­—èŠ‚é•¿åº¦
 	SocketInfo.bSending = true;
 	ReTriggerEvent(&SocketInfo);
 	pthread_mutex_unlock(&m_mutex);
@@ -266,8 +269,8 @@ void* TCPClient::WorkerThread(void* lpParameter)
 {
 	TCPClient* inst = (TCPClient*)lpParameter;
 
-	int nfds;  //·µ»ØµÄµÈ´ıÊÂ¼şÊıÁ¿
-	struct epoll_event Events[MAX_EPWEVENT_NUM]; //ÉùÃ÷epoll_event½á¹¹ÌåµÄ±äÁ¿Êı×éÓÃÓÚ»Ø´«Òª´¦ÀíµÄÊÂ¼ş
+	int nfds;  //è¿”å›çš„ç­‰å¾…äº‹ä»¶æ•°é‡
+	struct epoll_event Events[MAX_EPWEVENT_NUM]; //å£°æ˜epoll_eventç»“æ„ä½“çš„å˜é‡æ•°ç»„ç”¨äºå›ä¼ è¦å¤„ç†çš„äº‹ä»¶
 	PSOCKET_INFORMATION SI = &inst->SocketInfo;
 	while (!inst->m_Terminated)
 	{
@@ -287,8 +290,16 @@ void* TCPClient::WorkerThread(void* lpParameter)
 		{
 			if (inst->m_ConnectStatus == TS_CONNECTING)
 			{
-				if (!(Events[i].events & EPOLLIN) && (Events[i].events & EPOLLOUT))
-				//if (Events[i].events & EPOLLOUT)
+				int so_error = 0;
+				socklen_t so_len = sizeof(so_error);
+				bool writable = (Events[i].events & EPOLLOUT) != 0;
+				bool failed = (Events[i].events & (EPOLLERR | EPOLLHUP)) != 0;
+				if (writable || failed)
+				{
+					if (getsockopt(SI->Socket, SOL_SOCKET, SO_ERROR, &so_error, &so_len) < 0)
+						so_error = errno;
+				}
+				if (writable && !failed && so_error == 0)
 				{
 					SI->FirstActiveTick = GetTickCount64();
 					LOG_S("connected!\n");
@@ -297,90 +308,90 @@ void* TCPClient::WorkerThread(void* lpParameter)
 						inst->m_OnConnected(inst->RegOnConnectedClass);
 					break;
 				}
-				else {
+				else if (failed || so_error != 0 || (Events[i].events & EPOLLIN)) {
 					LOG_S("connect failed!\n");
 					if (inst->m_OnConnectFail != NULL)
 						inst->m_OnConnectFail(inst->RegOnConnectFailClass);
-					inst-> CloseConnect();
+					inst->CloseConnect();
 					inst->m_ConnectStatus = TS_NOTCONNECT;
 					break;
 				}
 			} else if (Events[i].events & EPOLLHUP || Events[i].events & EPOLLRDHUP) 
 			{
 				inst->Disconnect();
-				break; //ÒÑ¾­¶Ï¿ªÁ¬½Ó¾Í²»ÓÃ¼ÌĞø¼ì²éÆäËûÊÂ¼ş
+				break; //å·²ç»æ–­å¼€è¿æ¥å°±ä¸ç”¨ç»§ç»­æ£€æŸ¥å…¶ä»–äº‹ä»¶
 			}
-			if (Events[i].events & EPOLLIN && SI->bReading) //ÊÕµ½Êı¾İ¾ÍĞ÷ÊÂ¼ş£¬ÄÇÃ´½øĞĞ¶ÁÈë¡£
+			if (Events[i].events & EPOLLIN && SI->bReading) //æ”¶åˆ°æ•°æ®å°±ç»ªäº‹ä»¶ï¼Œé‚£ä¹ˆè¿›è¡Œè¯»å…¥ã€‚
 			{
 
-				//Êı¾İ»º³åÇøµÄ½ÓÊÕÊı¾İµÄÎ»ÖÃ
+				//æ•°æ®ç¼“å†²åŒºçš„æ¥æ”¶æ•°æ®çš„ä½ç½®
 				char* pBaseAddr = SI->RecvDataBuf.buf;
 
-				//ÆÚÍû»ñÈ¡µÄÊı¾İ×Ö½ÚÊı
+				//æœŸæœ›è·å–çš„æ•°æ®å­—èŠ‚æ•°
 				long ExpRecvNum = SI->BytesRECV;
 
-				//Ã¿´Îµ÷ÓÃrecv·µ»ØµÄ·µ»ØÊÕµ½µÄÊı¾İ×Ö½ÚÊı
+				//æ¯æ¬¡è°ƒç”¨recvè¿”å›çš„è¿”å›æ”¶åˆ°çš„æ•°æ®å­—èŠ‚æ•°
 				long recvNum = 0;
-				//ÒÑ¶ÁÈ¡µÄ×Ö½Ú×ÜÊı
+				//å·²è¯»å–çš„å­—èŠ‚æ€»æ•°
 				long recvNumTotal = 0;
-				long iOffset = 0;  //»º´æÇøµÄÆ«ÒÆÁ¿
+				long iOffset = 0;  //ç¼“å­˜åŒºçš„åç§»é‡
 
-				//±¾´Î¶ÁÊı¾İÊÇ·ñÍê³É£¬ÓĞÁ½ÖÖÇé¿ö£¬1ÊÇÍê³É¶ÁÈ¡ÆÚ´ıµÄÊı¾İÁ¿£¬2ÊÇµ±Ç°Ã»ÓĞ¸ü¶àµÄÊı¾İ¿É¶Á
+				//æœ¬æ¬¡è¯»æ•°æ®æ˜¯å¦å®Œæˆï¼Œæœ‰ä¸¤ç§æƒ…å†µï¼Œ1æ˜¯å®Œæˆè¯»å–æœŸå¾…çš„æ•°æ®é‡ï¼Œ2æ˜¯å½“å‰æ²¡æœ‰æ›´å¤šçš„æ•°æ®å¯è¯»
 				bool bReadCompleted = false;
-				//¿ªÊ¼¶ÁÈ¡Êı¾İ
+				//å¼€å§‹è¯»å–æ•°æ®
 				while (1)
 				{
 					recvNum = recv(SI->Socket, pBaseAddr + iOffset, ExpRecvNum, 0);
-					//¶ÁÈ¡Ê§°Ü°´·µ»ØÂë½øĞĞÏàÓ¦´¦Àí
+					//è¯»å–å¤±è´¥æŒ‰è¿”å›ç è¿›è¡Œç›¸åº”å¤„ç†
 					if (recvNum < 0)
 					{
 						if (errno == EAGAIN)
 						{
-							// µ±errnoÎªEAGAINÊ±,±íÊ¾µ±Ç°»º³åÇøÒÑÎŞÊı¾İ¿É¶Á,¾ÍÍê³É±¾´Î¶Á
+							// å½“errnoä¸ºEAGAINæ—¶,è¡¨ç¤ºå½“å‰ç¼“å†²åŒºå·²æ— æ•°æ®å¯è¯»,å°±å®Œæˆæœ¬æ¬¡è¯»
 							bReadCompleted = true;
-							SI->RecvDataBuf.len = recvNumTotal;  //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+							SI->RecvDataBuf.len = recvNumTotal;  //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 							break;
 						}
 						else if (errno == ECONNRESET)
 						{
-							// ¶Ô·½·¢ËÍÁËRST
+							// å¯¹æ–¹å‘é€äº†RST
 							inst->Disconnect();
 							break;
 						}
 						else if (errno == EINTR)
 						{
-							// ±»ĞÅºÅÖĞ¶ÏÖØĞÂÔÙ¶ÁÈ¡
+							// è¢«ä¿¡å·ä¸­æ–­é‡æ–°å†è¯»å–
 							continue;
 						}
 						else
 						{
-							//ÆäËû²»¿ÉÃÖ²¹µÄ´íÎó
+							//å…¶ä»–ä¸å¯å¼¥è¡¥çš„é”™è¯¯
 							inst->Disconnect();
 							break;
 						}
 					}
 					else if (recvNum == 0)
 					{
-						// ÕâÀï±íÊ¾¶Ô¶ËµÄsocketÒÑÕı³£¹Ø±Õ.·¢ËÍ¹ıFINÁË¡£
+						// è¿™é‡Œè¡¨ç¤ºå¯¹ç«¯çš„socketå·²æ­£å¸¸å…³é—­.å‘é€è¿‡FINäº†ã€‚
 						inst->Disconnect();
 						break;
 					}
 
-					//ÏÂÃæÊÇ¶ÁÈ¡µ½Êı¾İºóµÄ´¦Àí
+					//ä¸‹é¢æ˜¯è¯»å–åˆ°æ•°æ®åçš„å¤„ç†
 
-					recvNumTotal += recvNum; //ÀÛ¼ÆÒÑ¶ÁµÄÊı¾İÁ¿
+					recvNumTotal += recvNum; //ç´¯è®¡å·²è¯»çš„æ•°æ®é‡
 					ExpRecvNum -= recvNum;
-					//ÒÑ¾­Íê³ÉÆÚÍû¶ÁÈ¡µÄÊı¾İ¾Í²»¼ÌĞø¶ÁÈ¡
+					//å·²ç»å®ŒæˆæœŸæœ›è¯»å–çš„æ•°æ®å°±ä¸ç»§ç»­è¯»å–
 					if (ExpRecvNum == 0)
 					{
-						SI->RecvDataBuf.len = recvNumTotal; //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+						SI->RecvDataBuf.len = recvNumTotal; //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 						bReadCompleted = true;
 						break;
 					}
-					else //Ã»ÓĞÍê³É¶ÁÈ¡ÆÚ´ı³¤¶ÈµÄÊı¾İ¾Í¼ÌĞø¶Á
+					else //æ²¡æœ‰å®Œæˆè¯»å–æœŸå¾…é•¿åº¦çš„æ•°æ®å°±ç»§ç»­è¯»
 					{
 						iOffset += recvNum;
-						continue;   // ĞèÒªÔÙ´Î¶ÁÈ¡
+						continue;   // éœ€è¦å†æ¬¡è¯»å–
 					}
 				}
 				__sync_add_and_fetch(&inst->m_TotalRecvBytes, recvNumTotal);
@@ -393,74 +404,74 @@ void* TCPClient::WorkerThread(void* lpParameter)
 				}
 				SI->bReading = false;
 			}
-			if (Events[i].events & EPOLLOUT && SI->bSending)//ÊÕµ½¿ÉÒÔ·¢ËÍÊı¾İµÄÊÂ¼ş£¬ÄÇÃ´½øĞĞ·¢ËÍ¡£
+			if (Events[i].events & EPOLLOUT && SI->bSending)//æ”¶åˆ°å¯ä»¥å‘é€æ•°æ®çš„äº‹ä»¶ï¼Œé‚£ä¹ˆè¿›è¡Œå‘é€ã€‚
 			{
-				//Êı¾İ»º³åÇøµÄ·¢ËÍÊı¾İµÄÎ»ÖÃ
+				//æ•°æ®ç¼“å†²åŒºçš„å‘é€æ•°æ®çš„ä½ç½®
 				char* pBaseAddr = SI->SendDataBuf.buf;
 
-				//ÆÚÍû»ñÈ¡µÄÊı¾İ×Ö½ÚÊı
+				//æœŸæœ›è·å–çš„æ•°æ®å­—èŠ‚æ•°
 				long ExpSendNum = SI->BytesSEND;
 
-				//Ã¿´Îµ÷ÓÃsend·¢Éú³É¹¦µÄÊı¾İ×Ö½ÚÊı
+				//æ¯æ¬¡è°ƒç”¨sendå‘ç”ŸæˆåŠŸçš„æ•°æ®å­—èŠ‚æ•°
 				long sendNum = 0;
 				
-				//ÒÑ·¢ËÍµÄ×Ö½Ú×ÜÊı
+				//å·²å‘é€çš„å­—èŠ‚æ€»æ•°
 				long sendNumTotal = 0;
-				long iOffset = 0;  //»º´æÇøµÄÆ«ÒÆÁ¿
+				long iOffset = 0;  //ç¼“å­˜åŒºçš„åç§»é‡
 
-				//±¾´Î·¢ËÍÊı¾İÊÇ·ñÍê³É£¬ÓĞÁ½ÖÖÇé¿ö£¬1ÊÇÍê³É·¢ËÍÆÚ´ıµÄÊı¾İÁ¿£¬2ÊÇµ±Ç°·¢ËÍ»º³åÒÑÂú²»ÄÜ·¢ËÍ³öÈ¥
+				//æœ¬æ¬¡å‘é€æ•°æ®æ˜¯å¦å®Œæˆï¼Œæœ‰ä¸¤ç§æƒ…å†µï¼Œ1æ˜¯å®Œæˆå‘é€æœŸå¾…çš„æ•°æ®é‡ï¼Œ2æ˜¯å½“å‰å‘é€ç¼“å†²å·²æ»¡ä¸èƒ½å‘é€å‡ºå»
 				bool bSendCompleted = false;
 				
-				//¿ªÊ¼·¢ËÍÊı¾İ
+				//å¼€å§‹å‘é€æ•°æ®
 				while (1) {
 					sendNum = send(SI->Socket, pBaseAddr + iOffset, ExpSendNum, 0);
-					//·¢ËÍÊ§°Ü°´·µ»ØÂë½øĞĞÏàÓ¦´¦Àí
+					//å‘é€å¤±è´¥æŒ‰è¿”å›ç è¿›è¡Œç›¸åº”å¤„ç†
 					if (sendNum < 0)
 					{
 						if (errno == EAGAIN)
 						{
-							// µ±errnoÎªEAGAINÊ±,±íÊ¾µ±Ç°»º³åÇøÂú,¾ÍÍê³É±¾´Î·¢ËÍ
+							// å½“errnoä¸ºEAGAINæ—¶,è¡¨ç¤ºå½“å‰ç¼“å†²åŒºæ»¡,å°±å®Œæˆæœ¬æ¬¡å‘é€
 							bSendCompleted = true;
-							SI->SendDataBuf.len = sendNumTotal;  //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+							SI->SendDataBuf.len = sendNumTotal;  //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 							break;
 						}
 						else if (errno == ECONNRESET)
 						{
-							// ¶Ô·½·¢ËÍÁËRST
+							// å¯¹æ–¹å‘é€äº†RST
 							inst->Disconnect();
 							break;
 						}
 						else if (errno == EINTR)
 						{
-							// ±»ĞÅºÅÖĞ¶ÏÖØĞÂÔÙ·¢ËÍ
+							// è¢«ä¿¡å·ä¸­æ–­é‡æ–°å†å‘é€
 							continue;
 						}
 						else
 						{
-							//ÆäËû²»¿ÉÃÖ²¹µÄ´íÎó
+							//å…¶ä»–ä¸å¯å¼¥è¡¥çš„é”™è¯¯
 							inst->Disconnect();
 							break;
 						}
 					}
-					//ÏÂÃæÊÇ·¢ËÍÊı¾İ³É¹¦ºóµÄ´¦Àí
-					sendNumTotal += sendNum; //ÀÛ¼ÆÒÑ·¢ËÍµÄÊı¾İÁ¿
+					//ä¸‹é¢æ˜¯å‘é€æ•°æ®æˆåŠŸåçš„å¤„ç†
+					sendNumTotal += sendNum; //ç´¯è®¡å·²å‘é€çš„æ•°æ®é‡
 					ExpSendNum -= sendNum;
-					//ÒÑ¾­Íê³ÉÆÚÍû·¢ËÍµÄÊı¾İ¾Í²»¼ÌĞø¶ÁÈ¡
+					//å·²ç»å®ŒæˆæœŸæœ›å‘é€çš„æ•°æ®å°±ä¸ç»§ç»­è¯»å–
 					if (ExpSendNum == 0)
 					{
-						SI->SendDataBuf.len = sendNumTotal; //ÉèÖÃ±¾´ÎÒÑ¶ÁµÄ×Ö½ÚÊı
+						SI->SendDataBuf.len = sendNumTotal; //è®¾ç½®æœ¬æ¬¡å·²è¯»çš„å­—èŠ‚æ•°
 						bSendCompleted = true;
 						break;
 					}
-					else //·¢ËÍÃ»ÓĞ´ïµ½ÆÚ´ı³¤¶ÈµÄÊı¾İ¾Í¼ÌĞø·¢
+					else //å‘é€æ²¡æœ‰è¾¾åˆ°æœŸå¾…é•¿åº¦çš„æ•°æ®å°±ç»§ç»­å‘
 					{
 						iOffset += sendNum;
-						continue;   // ĞèÒªÔÙ´Î·¢ËÍ
+						continue;   // éœ€è¦å†æ¬¡å‘é€
 					}
 				}
 				__sync_add_and_fetch(&inst->m_TotalSentBytes, sendNumTotal);
 				SI->LastActiveTick = GetTickCount64();
-				SI->RecvTotalBytes += sendNumTotal;
+				SI->SendTotalBytes += sendNumTotal;
 				if (bSendCompleted && inst->m_OnSendCompleted)
 				{
 					inst->m_OnSendCompleted(SI->SendDataBuf.buf, SI->SendDataBuf.len,

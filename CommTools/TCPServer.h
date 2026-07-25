@@ -6,12 +6,12 @@
 #include "SockPubDefine.h"
 
 #define MAX_CONNECT_NUM 64
-#define MAX_EPWEVENT_NUM 20  //Ò»´ÎµÈ´ıEPollÊÂ¼şµÄ×î´óÊı
-#define WAIT_TIME_OUT  300   //µÈ´ıEPollÊÂ¼ş³¬Ê±Öµ£¨ºÁÃë£©
+#define MAX_EPWEVENT_NUM 20  //ä¸€æ¬¡ç­‰å¾…EPolläº‹ä»¶çš„æœ€å¤§æ•°
+#define WAIT_TIME_OUT  300   //ç­‰å¾…EPolläº‹ä»¶è¶…æ—¶å€¼ï¼ˆæ¯«ç§’ï¼‰
 
 //Type define for Callback functions
 
-//Len- Êµ¼Ê½Ó·¢ËÍ/ÊÕµ½×Ö½Ú  ExpLen -PostSend/PostRecv ÆÚÍû·¢ËÍ/½ÓÊÕµÄ×Ö½Ú
+//Len- å®é™…æ¥å‘é€/æ”¶åˆ°å­—èŠ‚  ExpLen -PostSend/PostRecv æœŸæœ›å‘é€/æ¥æ”¶çš„å­—èŠ‚
 typedef void(*PServerRecvSendEvent)(long ID, char* Buf, long Len, long ExpLen, void* pClass); 
 
 typedef void(*PServerConnectStatusEvent)(long ID, void* pClass);
@@ -20,33 +20,38 @@ typedef void(*PServerConnectStatusEvent)(long ID, void* pClass);
 class TCPServer
 {
 private:
-	//È«¾ÖÍ³¼ÆĞÅÏ¢
-	_U64 volatile m_TotalRecvBytes;  //½ÓÊÕ×Ö½ÚºÏ¼Æ
-	_U64 volatile m_TotalSentBytes;  //·¢ËÍ×Ö½ÚºÏ¼Æ
-	_U64  m_MaxTimeNoActive; //ÔÊĞí×î³¤µÄ²»»î¶¯Ê±¼ä£¨Ãë£©
-	int m_af;  //Ğ­ÒéÀàĞÍ AF_INET£¬ AF_INET6
-	DWORD volatile m_IDCount;  //Á¬½ÓID¼ÆÊı
-	WORD m_MaxConnectNum;  //ÔÊĞíµÄ×î´óÁ¬½ÓÊı
-	WORD m_Port; //¼àÌı¶Ë¿Ú
-	int m_epfd_tf;    //Êı¾İ´«ÊäÊÂ¼şÃèÊö·û
+	//å…¨å±€ç»Ÿè®¡ä¿¡æ¯
+	_U64 volatile m_TotalRecvBytes;  //æ¥æ”¶å­—èŠ‚åˆè®¡
+	_U64 volatile m_TotalSentBytes;  //å‘é€å­—èŠ‚åˆè®¡
+	_U64  m_MaxTimeNoActive; //å…è®¸æœ€é•¿çš„ä¸æ´»åŠ¨æ—¶é—´ï¼ˆç§’ï¼‰
+	int m_af;  //åè®®ç±»å‹ AF_INETï¼Œ AF_INET6
+	DWORD volatile m_IDCount;  //è¿æ¥IDè®¡æ•°
+	WORD m_MaxConnectNum;  //å…è®¸çš„æœ€å¤§è¿æ¥æ•°
+	WORD m_Port; //ç›‘å¬ç«¯å£
+	int m_epfd_tf;    //æ•°æ®ä¼ è¾“äº‹ä»¶æè¿°ç¬¦
 
 
 	//char AcceptBuffer[(sizeof(SOCKADDR_STORAGE) + 16) * 2];
 
 	SOCKET ListenSocket;
 	pthread_mutex_t m_mutex;
-	char m_LocalServerIP[128];  //±¾¶ËµØÖ·
+	char m_LocalServerIP[128];  //æœ¬ç«¯åœ°å€
 	bool m_ServerStarted;
 	bool m_Terminated;
 
-	CBaseLog* LogObj;  //ÈÕÖ¾½Ó¿Ú¶ÔÏó
-	_U64  m_LastTick;  //×îºó»î¶¯Ê±¼ä
-	DWORD volatile m_ConnTotal;  //µ±Ç°Á¬½ÓÊı
+	CBaseLog* LogObj;  //æ—¥å¿—æ¥å£å¯¹è±¡
+	_U64  m_LastTick;  //æœ€åæ´»åŠ¨æ—¶é—´
+	DWORD volatile m_ConnTotal;  //å½“å‰è¿æ¥æ•°
 
-	//´æ·ÅsocketĞÅÏ¢µÄÊı×é£¬µÚ0ÏîÄ¿±£Áô£¬´ÓµÚ1Ïî¿ªÊ¼
+	//å­˜æ”¾socketä¿¡æ¯çš„æ•°ç»„ï¼Œç¬¬0é¡¹ç›®ä¿ç•™ï¼Œä»ç¬¬1é¡¹å¼€å§‹
 	PSOCKET_INFORMATION SocketArray[MAX_CONNECT_NUM+1] = { 0 };
 
-	//»Øµ÷º¯ÊıÖ¸Õë
+	//å…³é—­è¿æ¥åå»¶è¿Ÿé‡Šæ”¾ï¼Œé¿å… TransferThread ä»æŒæœ‰ epoll data.ptr æ—¶ UAF
+	PSOCKET_INFORMATION m_PendingFree[MAX_CONNECT_NUM + 1];
+	WORD m_PendingFreeCount;
+	void DrainPendingFree();
+
+	//å›è°ƒå‡½æ•°æŒ‡é’ˆ
 	PServerRecvSendEvent m_OnRecvCompleted;
 	void* RegOnRecvCompletedClass;
 
@@ -62,11 +67,11 @@ private:
 	long GenID();
 	long GetSocketInformationIDXbyID(long ConnectID);
 
-	//´¦ÀíÁ¬½ÓÏß³Ì
+	//å¤„ç†è¿æ¥çº¿ç¨‹
 	pthread_t  m_AcceptThreadId;
 	static void* AcceptThread(void* lpParameter);
 
-	//´¦ÀíÊÕ·¢´«ÊäÏß³Ì
+	//å¤„ç†æ”¶å‘ä¼ è¾“çº¿ç¨‹
 	pthread_t  m_TransferThreadId;
 	static void* TransferThread(void* lpParameter);
 

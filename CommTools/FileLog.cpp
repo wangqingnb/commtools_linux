@@ -29,13 +29,14 @@ CFileLog::~CFileLog(void)
     if (fp)
 		fclose(fp);
 }
-void CFileLog::WriteLog(string& s)
+void CFileLog::WriteLog(const char* s)
 {
-	fputs(s.data(), fp);
+	if (s == NULL || fp == NULL) return;
+	fputs(s, fp);
 	fflush(fp);
 }
 
-void CFileLog::WriteLogWithFormat(char* pszFormat, ...) 
+void CFileLog::WriteLogWithFormat(const char* pszFormat, ...) 
 {
 
 	va_list argList;

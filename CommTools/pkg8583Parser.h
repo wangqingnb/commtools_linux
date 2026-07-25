@@ -1,4 +1,4 @@
-
+#pragma once
 #pragma pack(1)
 #ifndef IN
 #define IN
@@ -43,7 +43,7 @@ protected:
 
 public:
     T8583Parser();
-    TISO8583* CreateISO8583FromBin(char* pData,  TMsgType MsgTypeMode = MsgType_CHAR);
+    TISO8583* CreateISO8583FromBin(char* pData, DWORD iPkgSize, TMsgType MsgTypeMode = MsgType_CHAR);
 	TISO8583* CreateISO8583FromBinEx(char* pData,  DWORD iPkgSize, TMsgType MsgTypeMode = MsgType_CHAR);
     virtual void LoadFieldFormatDef();
 };

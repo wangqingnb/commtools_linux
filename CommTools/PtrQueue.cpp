@@ -19,7 +19,7 @@ void PtrQueue::init(size_t InitCapacity)
 
     if (m_bBlock) {
 		int r =	pthread_cond_init(&m_cond, NULL);
-		if (r < 0)
+		if (r != 0)
 		{
 			char buf[MAX_MSG_SIZE];
 			snprintf(buf, MAX_MSG_SIZE, "pthread_cond_init Failed!  Code: %d, %s\n", errno, strerror(errno));
@@ -37,6 +37,7 @@ void PtrQueue::init(size_t InitCapacity)
 
 PtrQueue::PtrQueue(size_t InitCapacity)
 {
+	m_bBlock = false;
 	init(InitCapacity);
 }
 
@@ -155,13 +156,13 @@ void* PtrQueue::Pop(long wait)
 			//UnLock(); 
 			//注意：不需要解锁，因为pthread_cond_timedwait会自动解锁， 
 			//这个函数内部过程为：//解锁->等待->加锁
+			struct timespec abstime;
+			struct timeval now;
+			gettimeofday(&now, NULL);
+			long nsec = now.tv_usec * 1000 + (wait % 1000) * 1000000;
+			abstime.tv_sec = now.tv_sec + nsec / 1000000000 + wait / 1000;
+			abstime.tv_nsec = nsec % 1000000000;
 			while (1) { //循环等待
-				struct timespec abstime;
-				struct timeval now;
-				gettimeofday(&now, NULL);
-				long nsec = now.tv_usec * 1000 + (wait % 1000) * 1000000;
-				abstime.tv_sec=now.tv_sec + nsec / 1000000000 + wait / 1000;
-				abstime.tv_nsec=nsec % 1000000000;
 				iResult = pthread_cond_timedwait(&m_cond, &m_mutex, &abstime);
 				if (iResult == 0) {  //收到事件通知了
 					if (m_pPush != m_pPop) //有数据了
@@ -192,5 +193,8 @@ void* PtrQueue::Pop(long wait)
 
 size_t PtrQueue::getCount()
 {
-	return m_Count;
+	Lock();
+	size_t n = m_Count;
+	UnLock();
+	return n;
 }

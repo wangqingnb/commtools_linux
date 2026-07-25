@@ -574,7 +574,7 @@ void des(U_CHAR* source, U_CHAR* inkey, TDesMode mode, U_CHAR* dest)
      } 
 }
 
-//Á¬Ğø¿é¼ÓÃÜ
+//è¿ç»­å—åŠ å¯†
 void des_strs(TDesMode desMode, U_CHAR* pData, U_CHAR* pKey, U_CHAR* pOutData, DWORD& DataLen)
 {
   for (DWORD i = 0; i < DataLen / 8; i++)

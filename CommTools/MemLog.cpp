@@ -10,6 +10,8 @@ CSysLog::CSysLog(void)
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 	pthread_mutex_init(&m_mutex, &attr);
+	pthread_mutexattr_destroy(&attr);
+	pthread_cond_init(&m_cond, NULL);
 	pStrQueue = new queue<string>;
 }
 
@@ -67,7 +69,7 @@ string CSysLog::GetLog()
 {
 	lock();
 	string s = "";
-	//ÕâÀïÏÞÖÆÊä³öµÄ×Ö·û²»Ì«´ó(s.size() < 1024£¬ µ«ÊÇÖµµÃ×¢ÒâµÄÊÇ£ºÊµ¼ÊÊä³ö¿ÉÄÜ»á´óÓÚ1024)
+	//æ©æ¬“å™·é—„æ„¬åŸ—æˆæ’³åš­é¨å‹«ç“§ç»—ï¸¿ç¬‰æ¾¶?æ¾¶?(s.size() < 1024é”›? æµ£å—˜æ§¸éŠç…Žç·±å¨‰ã„¦å‰°é¨å‹¬æ§¸é”›æ°¬ç–„é—„å‘°ç·­é‘å“„å½²é‘³æˆ’ç´°æ¾¶Ñ‚ç°¬1024)
 	while (pStrQueue->size() && (s.size() < 1024)) {
 		s += pStrQueue->front();
 		pStrQueue->pop();
