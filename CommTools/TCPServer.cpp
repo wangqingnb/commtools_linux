@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <errno.h>
 
 namespace {
 
@@ -232,16 +233,15 @@ void* TCPServer::TransferThread(void* lpParameter)
 		{
 			//获取socket信息
 			PSOCKET_INFORMATION SI = (PSOCKET_INFORMATION)Events[i].data.ptr;
-			//如果不是有效的SOCKET_INFORMATION 就不处理，一般出现于被其他代码强制置为无效
-			if (SI == NULL) 
+			//无效或本批次已关闭的连接跳过
+			if (SI == NULL || SI->Socket < 0)
 				continue;
 
-			//收到对方关闭连接事件，关闭当前连接
-			if (Events[i].events & EPOLLHUP || Events[i].events & EPOLLRDHUP) {
+			//关闭/错误事件
+			if (Events[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
 				inst->CloseConnect(SI->ID);
-				SI = NULL; //置为无效
-				continue;;
-			} 
+				continue;
+			}
 			if (Events[i].events & EPOLLIN)//收到数据，那么进行读入。
 			{
 				if (!SI->bReading)  //当前不为读取状态就处理下一个事件
@@ -268,7 +268,7 @@ void* TCPServer::TransferThread(void* lpParameter)
 					//读取失败按返回码进行相应处理
 					if (recvNum < 0)
 					{
-						if (errno == EAGAIN)
+						if (errno == EAGAIN || errno == EWOULDBLOCK)
 						{
 							// 当errno为EAGAIN时,表示当前缓冲区已无数据可读,就完成本次读
 							bReadCompleted = true;
@@ -325,6 +325,7 @@ void* TCPServer::TransferThread(void* lpParameter)
 				if (SI) {
 					SI->LastActiveTick = GetTickCount64();  //更新连接的最后活动时间戳
 					SI->bReading = false;  //设置当前状态为未在读取
+					inst->ReTriggerEvent(SI); // 去掉 EPOLLIN，避免 LT 下空转
 
 					//处理已注册的接收成功回调函数
 					if (bReadCompleted && inst->m_OnRecvCompleted)
@@ -336,6 +337,8 @@ void* TCPServer::TransferThread(void* lpParameter)
 				else
 					continue;
 			}
+			if (SI == NULL || SI->Socket < 0)
+				continue;
 			if (Events[i].events & EPOLLOUT)//收到可以发送数据的事件，那么进行发送。
 			{
 				if (!SI->bSending)
@@ -343,76 +346,75 @@ void* TCPServer::TransferThread(void* lpParameter)
 				//数据缓冲区的发送数据的位置
 				char* pBaseAddr = SI->SendDataBuf.buf;
 
-				//期望获取的数据字节数
-				long ExpSendNum = SI->BytesSEND;
+				//从已发送偏移继续，直到发完或 EAGAIN
+				long iOffset = (long)SI->BytesSentSoFar;
+				long ExpSendNum = (long)SI->BytesSEND - iOffset;
+				if (ExpSendNum <= 0) {
+					SI->bSending = false;
+					inst->ReTriggerEvent(SI);
+					continue;
+				}
 
-				//每次调用send发生成功的数据字节数
 				long sendNum = 0;
-				
-				//已发送的字节总数
-				long sendNumTotal = 0;
-				long iOffset = 0;  //缓存区的偏移量
-
-				//本次发送数据是否完成，有两种情况，1是完成发送期待的数据量，2是当前发送缓冲已满不能发送出去
+				long sendNumThisRound = 0;
 				bool bSendCompleted = false;
+				bool bClosed = false;
 				
 				//开始发送数据
-				while (1) {
+				while (ExpSendNum > 0) {
 					sendNum = send(SI->Socket, pBaseAddr + iOffset, ExpSendNum, 0);
 					//发送失败按返回码进行相应处理
 					if (sendNum < 0)
 					{
-						if (errno == EAGAIN)
+						if (errno == EAGAIN || errno == EWOULDBLOCK)
 						{
-							// 当errno为EAGAIN时,表示当前缓冲区满,就完成本次发送
-							bSendCompleted = true;
-							SI->SendDataBuf.len = sendNumTotal;  //设置本次已读的字节数
+							// 缓冲满：保留 bSending，等下次 EPOLLOUT 续传
+							SI->BytesSentSoFar = (DWORD)iOffset;
+							SI->SendDataBuf.len = SI->BytesSentSoFar;
 							break;
 						}
 						else if (errno == ECONNRESET)
 						{
-							// 对方发送了RST
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //置为无效
+							bClosed = true;
 							break;
 						}
 						else if (errno == EINTR)
 						{
-							// 被信号中断重新再发送
 							continue;
 						}
 						else
 						{
-							//其他不可弥补的错误
 							inst->CloseConnect(SI->ID);
-							SI = NULL; //置为无效
+							bClosed = true;
 							break;
 						}
 					}
-					//下面是发送数据成功后的处理
-					sendNumTotal += sendNum; //累计已发送的数据量
+					sendNumThisRound += sendNum;
+					iOffset += sendNum;
 					ExpSendNum -= sendNum;
-					//已经完成期望发送的数据就不继续读取
 					if (ExpSendNum == 0)
 					{
-						SI->SendDataBuf.len = sendNumTotal; //设置本次已读的字节数
+						SI->BytesSentSoFar = (DWORD)iOffset;
+						SI->SendDataBuf.len = SI->BytesSentSoFar;
 						bSendCompleted = true;
 						break;
 					}
-					else //发送没有达到期待长度的数据就继续发
-					{
-						iOffset += sendNum;
-						continue;   // 需要再次发送
-					}
 				}
-				__sync_add_and_fetch(&inst->m_TotalSentBytes, sendNumTotal);
-				if (SI) {
-					SI->LastActiveTick = GetTickCount64();
-					if (bSendCompleted && inst->m_OnSendCompleted)
+				__sync_add_and_fetch(&inst->m_TotalSentBytes, sendNumThisRound);
+				if (bClosed)
+					continue;
+				if (SI->Socket < 0)
+					continue;
+				SI->LastActiveTick = GetTickCount64();
+				if (bSendCompleted)
+				{
+					SI->bSending = false;
+					inst->ReTriggerEvent(SI); // 去掉 EPOLLOUT
+					if (inst->m_OnSendCompleted)
 					{
 						inst->m_OnSendCompleted(SI->ID, SI->SendDataBuf.buf, SI->SendDataBuf.len,
 							SI->BytesSEND, inst->RegOnSendCompletedClass);
-						SI->bSending = false;
 					}
 				}
 			}
@@ -437,8 +439,8 @@ void* TCPServer::AcceptThread(void* lpParameter)
 
 	//设置与要处理的事件相关的文件描述符
 	ev.data.fd = inst->ListenSocket;
-	//设置要处理的事件类型
-	ev.events = EPOLLIN | EPOLLET;
+	//水平触发：可读时会持续通知，配合下面 accept 排空
+	ev.events = EPOLLIN;
 
 	//注册epoll事件
 	epoll_ctl(epfd, EPOLL_CTL_ADD, inst->ListenSocket, &ev);
@@ -452,58 +454,60 @@ void* TCPServer::AcceptThread(void* lpParameter)
 			//如果新监测到一个SOCKET用户连接到了绑定的SOCKET端口，建立新的连接。
 			if (Events[i].data.fd == inst->ListenSocket)
 			{
-				struct sockaddr_storage clientaddr;
-				socklen_t clilen = sizeof(clientaddr);
-				SOCKET connfd = accept(inst->ListenSocket, (sockaddr*)&clientaddr, &clilen);
-				if (connfd < 0) {
-					LOG_SF("Accept socket error! %s, at %s %d\n", strerror(errno), __FILE__, __LINE__);
-					break;
-				}
-				char ipstr[INET6_ADDRSTRLEN] = { 0 };
-				if (!FormatSockAddr((sockaddr*)&clientaddr, clilen, ipstr, sizeof(ipstr)))
-					strncpy(ipstr, "?", sizeof(ipstr) - 1);
-				LOG_SF("new client connected!,ip:%s\n", ipstr);
-
-				if (inst->m_ConnTotal >= inst->m_MaxConnectNum) {
-					LOG_SF("too many connection!, current connects:%d, MaxConnect:%d\n", inst->m_ConnTotal, inst->m_MaxConnectNum);
-					close(connfd);
-					continue;
-				}
-				//保存Socket相关信息
-				pthread_mutex_lock(&inst->m_mutex);
-				inst->m_ConnTotal++;
-				inst->SocketArray[inst->m_ConnTotal] = PSOCKET_INFORMATION(malloc(sizeof(SOCKET_INFORMATION)));
-				if (inst->SocketArray[inst->m_ConnTotal] == NULL)
+				while (1)
 				{
-					LOG_SF("SocketArray: malloc() failed with error! ,%s\n", strerror(errno));
-					inst->m_ConnTotal--;
+					struct sockaddr_storage clientaddr;
+					socklen_t clilen = sizeof(clientaddr);
+					SOCKET connfd = accept(inst->ListenSocket, (sockaddr*)&clientaddr, &clilen);
+					if (connfd < 0) {
+						if (errno == EAGAIN || errno == EWOULDBLOCK)
+							break;
+						LOG_SF("Accept socket error! %s, at %s %d\n", strerror(errno), __FILE__, __LINE__);
+						break;
+					}
+					char ipstr[INET6_ADDRSTRLEN] = { 0 };
+					if (!FormatSockAddr((sockaddr*)&clientaddr, clilen, ipstr, sizeof(ipstr)))
+						strncpy(ipstr, "?", sizeof(ipstr) - 1);
+					LOG_SF("new client connected!,ip:%s\n", ipstr);
+
+					if (inst->m_ConnTotal >= inst->m_MaxConnectNum) {
+						LOG_SF("too many connection!, current connects:%d, MaxConnect:%d\n", inst->m_ConnTotal, inst->m_MaxConnectNum);
+						close(connfd);
+						continue;
+					}
+					//保存Socket相关信息
+					pthread_mutex_lock(&inst->m_mutex);
+					inst->m_ConnTotal++;
+					inst->SocketArray[inst->m_ConnTotal] = PSOCKET_INFORMATION(malloc(sizeof(SOCKET_INFORMATION)));
+					if (inst->SocketArray[inst->m_ConnTotal] == NULL)
+					{
+						LOG_SF("SocketArray: malloc() failed with error! ,%s\n", strerror(errno));
+						inst->m_ConnTotal--;
+						pthread_mutex_unlock(&inst->m_mutex);
+						close(connfd);
+						break;
+					}
+
+					// Fill in the details of our accepted socket.
+					PSOCKET_INFORMATION SI = inst->SocketArray[inst->m_ConnTotal];
+					SI->Socket = connfd;
+					SI->ID = inst->GenID();
+					SI->bEvent = false;
+					SI->BytesSEND = 0;
+					SI->BytesRECV = 0;
+					SI->BytesSentSoFar = 0;
+					SI->bReading = false;
+					SI->bSending = false;
+					SI->FirstActiveTick = GetTickCount64();
+					SI->LastActiveTick = SI->FirstActiveTick;
+
 					pthread_mutex_unlock(&inst->m_mutex);
-					close(connfd);
-					break;
+
+					inst->SetNonblocking(connfd);
+
+					if (inst->m_OnConnected != NULL)
+						inst->m_OnConnected(SI->ID, inst->RegOnConnectedClass);
 				}
-
-				// Fill in the details of our accepted socket.
-				PSOCKET_INFORMATION SI = inst->SocketArray[inst->m_ConnTotal];
-				SI->Socket = connfd;
-				SI->ID = inst->GenID();
-				SI->bEvent = false;
-				SI->BytesSEND = 0;
-				SI->BytesRECV = 0;
-				SI->bEvent = false;
-				SI->bReading = false;
-				SI->bSending = false;
-				//GetLocalTime(&inst->SocketArray[inst->m_ConnTotal]->ConnectedDT);
-				SI->FirstActiveTick = GetTickCount64();
-				SI->LastActiveTick = SI->FirstActiveTick;
-
-				pthread_mutex_unlock(&inst->m_mutex);
-
-				inst->SetNonblocking(connfd);
-
-				if (inst->m_OnConnected != NULL)
-					inst->m_OnConnected(SI->ID, inst->RegOnConnectedClass);
-
-				
 			}
 		}
 	}
@@ -512,18 +516,24 @@ void* TCPServer::AcceptThread(void* lpParameter)
 	return 0;
 }
 
-//重新触发epoll事件
+//重新触发epoll事件（水平触发；仅在投递读/写时注册对应兴趣）
 void TCPServer::ReTriggerEvent(PSOCKET_INFORMATION SI)
 {
-	struct epoll_event ev;  //ev用于注册事件
+	if (SI == NULL || SI->Socket < 0 || m_epfd_tf < 0)
+		return;
+
+	struct epoll_event ev;
 	ev.data.ptr = SI;
-	
+	ev.events = EPOLLHUP | EPOLLRDHUP | EPOLLERR;
+	if (SI->bReading)
+		ev.events |= EPOLLIN;
+	if (SI->bSending)
+		ev.events |= EPOLLOUT;
+
 	int op = SI->bEvent ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 	SI->bEvent = true;
 
-	//设置用操作事件
-	ev.events = EPOLLIN | EPOLLOUT| EPOLLET | EPOLLHUP | EPOLLRDHUP;
-	if (epoll_ctl(m_epfd_tf, op, SI->Socket, &ev) < 0) 
+	if (epoll_ctl(m_epfd_tf, op, SI->Socket, &ev) < 0)
 	{
 		perror("epoll_ctl_mod");
 		LOG_F("epoll_ctl_mod error!,%s\n", strerror(errno));
@@ -634,6 +644,7 @@ bool TCPServer::PostSend(long ConnectID, char* buf, DWORD len)
 
 	SI->SendDataBuf.len = 0;
 	SI->BytesSEND = len;
+	SI->BytesSentSoFar = 0;
 	memcpy(SI->SendBuffer, buf, len);
 	SI->SendDataBuf.buf = SI->SendBuffer;
 	SI->bSending = true;   //设置当前状态为正在发送

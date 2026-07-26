@@ -35,6 +35,7 @@ typedef struct _SOCKET_INFORMATION
 	SBUF			RecvDataBuf;   //接收数据缓存区（含长度+缓冲区地址）
 	DWORD			BytesSEND;   //期望发送操作发送的字节
 	DWORD			BytesRECV;  //期望接收操作的字节
+	DWORD			BytesSentSoFar; //当前 PostSend 已成功写出的字节（半包续传）
 	bool			bReading;   //true-正接收送数据，在没有完成上次读取时候，不可再次读取（post_recv）
 	bool			bSending;   //true-正在发送数据，在没有完成上次写的时候，不可再次发送（post_send）
 	char			RecvBuffer[DATA_BUFSIZE]; //内部接收缓冲区
