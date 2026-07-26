@@ -3,6 +3,9 @@
 #include "BaseLog.h"
 #include <time.h>
 #include <pthread.h>
+#include <atomic>
+#include <deque>
+#include <set>
 #include "SockPubDefine.h"
 
 #define MAX_CONNECT_NUM 64
@@ -29,6 +32,31 @@ private:
 	WORD m_MaxConnectNum;  //允许的最大连接数
 	WORD m_Port; //监听端口
 	int m_epfd_tf;    //数据传输事件描述符
+	int m_WakeupFd;   //唤醒 TransferThread 的 eventfd
+
+	enum SERVER_COMMAND_TYPE
+	{
+		SERVER_CMD_UPDATE_EPOLL,
+		SERVER_CMD_CLOSE,
+		SERVER_CMD_STOP
+	};
+
+	struct SERVER_COMMAND
+	{
+		SERVER_COMMAND_TYPE Type;
+		long ConnectID;
+		SERVER_COMMAND(SERVER_COMMAND_TYPE type, long id)
+			: Type(type), ConnectID(id) {}
+	};
+
+	std::deque<SERVER_COMMAND> m_CommandQueue;
+	std::set<long> m_ClosingConnections;
+	pthread_cond_t m_CloseCond;
+	pthread_cond_t m_CallbackCond;
+	pthread_cond_t m_AcceptReadyCond;
+	unsigned int m_ActiveCallbacks;
+	bool m_AcceptReady;
+	int m_AcceptStartError;
 
 
 	//char AcceptBuffer[(sizeof(SOCKADDR_STORAGE) + 16) * 2];
@@ -36,8 +64,11 @@ private:
 	SOCKET ListenSocket;
 	pthread_mutex_t m_mutex;
 	char m_LocalServerIP[128];  //本端地址
-	bool m_ServerStarted;
-	bool m_Terminated;
+	std::atomic<bool> m_ServerStarted;
+	std::atomic<bool> m_AcceptStopping;
+	std::atomic<bool> m_TransferStopping;
+	std::atomic<bool> m_Stopping;
+	std::atomic<bool> m_TransferOwnsStopCleanup;
 
 	CBaseLog* LogObj;  //日志接口对象
 	_U64  m_LastTick;  //最后活动时间
@@ -50,6 +81,17 @@ private:
 	PSOCKET_INFORMATION m_PendingFree[MAX_CONNECT_NUM + 1];
 	WORD m_PendingFreeCount;
 	void DrainPendingFree();
+	long FindSocketInformationIDXbyIDLocked(long ConnectID);
+	void EnqueueCommandLocked(SERVER_COMMAND_TYPE type, long ConnectID);
+	void WakeTransferThread();
+	void ProcessCommands();
+	bool UpdateEpoll(long ConnectID);
+	void CloseConnectInternal(long ConnectID);
+	void CloseAllConnections();
+	void CheckIdleConnections();
+	void CleanupStartFailure();
+	void FinishCallback();
+	void WaitForCallbacksLocked();
 
 	//回调函数指针
 	PServerRecvSendEvent m_OnRecvCompleted;
@@ -69,16 +111,19 @@ private:
 
 	//处理连接线程
 	pthread_t  m_AcceptThreadId;
+	std::atomic<bool> m_AcceptThreadCreated;
 	static void* AcceptThread(void* lpParameter);
 
 	//处理收发传输线程
 	pthread_t  m_TransferThreadId;
+	std::atomic<bool> m_TransferThreadCreated;
 	static void* TransferThread(void* lpParameter);
 
 	void ReTriggerEvent(PSOCKET_INFORMATION SI);
 public:
 	TCPServer(void);
 	void setLogObj(CBaseLog* LogObj);
+	// 对象必须由回调线程之外的所有者销毁；回调内允许 StopServer，但不可 delete TCPServer。
 	virtual ~TCPServer(void);
 	bool SetNonblocking(SOCKET sock);
 	void SetNetPort(WORD Port);

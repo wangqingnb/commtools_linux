@@ -20,6 +20,20 @@ volatile long g_last_id = 0;
 volatile int g_send_done = 0;
 volatile long g_send_len = 0;
 volatile long g_send_exp = 0;
+volatile int g_disconnected = 0;
+volatile int g_recv_done = 0;
+
+struct RecvContext
+{
+	TCPServer* server;
+	volatile long id;
+};
+
+struct StopContext
+{
+	TCPServer* server;
+	volatile int stopped;
+};
 
 void on_connected(long id, void* /*pClass*/)
 {
@@ -34,9 +48,36 @@ void on_send_completed(long /*id*/, char* /*buf*/, long len, long expLen, void* 
 	__sync_add_and_fetch(&g_send_done, 1);
 }
 
+void on_disconnected(long /*id*/, void* /*pClass*/)
+{
+	__sync_add_and_fetch(&g_disconnected, 1);
+}
+
+void on_connected_post_recv(long id, void* pClass)
+{
+	RecvContext* context = (RecvContext*)pClass;
+	context->id = id;
+	g_last_id = id;
+	__sync_add_and_fetch(&g_connected, 1);
+	context->server->PostRecv(id, NULL, 4);
+}
+
+void on_recv_completed(long /*id*/, char* /*buf*/, long len, long expLen, void* /*pClass*/)
+{
+	if (len == 4 && expLen == 4)
+		__sync_add_and_fetch(&g_recv_done, 1);
+}
+
+void on_connected_stop(long /*id*/, void* pClass)
+{
+	StopContext* context = (StopContext*)pClass;
+	context->server->StopServer();
+	__sync_add_and_fetch(&context->stopped, 1);
+}
+
 WORD test_port_base()
 {
-	return (WORD)(29000 + (getpid() % 500));
+	return (WORD)(20000 + (getpid() % 30000));
 }
 
 bool ipv6_loopback_available()
@@ -178,6 +219,57 @@ bool wait_send_done(int timeout_ms)
 		waited += 20;
 	}
 	return __sync_fetch_and_add(&g_send_done, 0) >= 1;
+}
+
+bool wait_disconnected(int expect, int timeout_ms)
+{
+	int waited = 0;
+	while (waited < timeout_ms) {
+		if (__sync_fetch_and_add(&g_disconnected, 0) >= expect)
+			return true;
+		usleep(20 * 1000);
+		waited += 20;
+	}
+	return __sync_fetch_and_add(&g_disconnected, 0) >= expect;
+}
+
+bool wait_recv_done(int timeout_ms)
+{
+	int waited = 0;
+	while (waited < timeout_ms) {
+		if (__sync_fetch_and_add(&g_recv_done, 0) >= 1)
+			return true;
+		usleep(20 * 1000);
+		waited += 20;
+	}
+	return __sync_fetch_and_add(&g_recv_done, 0) >= 1;
+}
+
+bool wait_peer_closed(int fd, int timeout_ms)
+{
+	if (fd < 0)
+		return false;
+	int waited = 0;
+	while (waited < timeout_ms) {
+		fd_set rfds;
+		FD_ZERO(&rfds);
+		FD_SET(fd, &rfds);
+		struct timeval tv;
+		tv.tv_sec = 0;
+		tv.tv_usec = 50 * 1000;
+		int rc = select(fd + 1, &rfds, NULL, NULL, &tv);
+		if (rc > 0) {
+			char ch;
+			int n = (int)recv(fd, &ch, 1, 0);
+			if (n == 0 || (n < 0 && errno == ECONNRESET))
+				return true;
+		}
+		else if (rc < 0 && errno != EINTR) {
+			return false;
+		}
+		waited += 50;
+	}
+	return false;
 }
 
 bool recv_all(int fd, char* buf, int need, int timeout_ms)
@@ -399,6 +491,10 @@ void test_post_send()
 	usleep(50 * 1000);
 	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
 	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
 	CHECK(wait_connected(1, 2000));
 
 	const int payload_len = 4096;
@@ -416,10 +512,259 @@ void test_post_send()
 	CHECK(g_send_exp == payload_len);
 	CHECK(g_send_len == payload_len);
 	CHECK(memcmp(got, payload, payload_len) == 0);
+	TCPLinkStatics stats;
+	CHECK(server.GetStatistics(g_last_id, &stats));
+	CHECK(stats.SendTotalBytes == (unsigned long long)payload_len);
+	CHECK(stats.ConnectedDT.tm_year > 0);
 
 	close(cfd);
 	if (started)
 		server.StopServer();
+}
+
+void test_stop_closes_clients()
+{
+	test_section("TCPServer StopServer closes clients");
+	WORD port = (WORD)(test_port_base() + 5);
+	g_connected = 0;
+	g_disconnected = 0;
+
+	TCPServer server;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.RegCallback_OnDisconnected(NULL, on_disconnected);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	server.StopServer();
+	CHECK(wait_peer_closed(cfd, 2000));
+	CHECK(wait_disconnected(1, 1000));
+	close(cfd);
+}
+
+void test_cross_thread_close()
+{
+	test_section("TCPServer cross-thread CloseConnect");
+	WORD port = (WORD)(test_port_base() + 6);
+	g_connected = 0;
+	g_disconnected = 0;
+	g_last_id = 0;
+
+	TCPServer server;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.RegCallback_OnDisconnected(NULL, on_disconnected);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	server.CloseConnect(g_last_id);
+	CHECK(wait_disconnected(1, 1000));
+	CHECK(wait_peer_closed(cfd, 2000));
+	close(cfd);
+	server.StopServer();
+}
+
+void test_unposted_peer_disconnect()
+{
+	test_section("TCPServer detects idle peer close");
+	WORD port = (WORD)(test_port_base() + 7);
+	g_connected = 0;
+	g_disconnected = 0;
+
+	TCPServer server;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.SetMaxTimeNoActive(0);
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.RegCallback_OnDisconnected(NULL, on_disconnected);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	close(cfd);
+	CHECK(wait_disconnected(1, 2000));
+	server.StopServer();
+}
+
+void test_idle_timeout()
+{
+	test_section("TCPServer idle timeout");
+	WORD port = (WORD)(test_port_base() + 8);
+	g_connected = 0;
+	g_disconnected = 0;
+
+	TCPServer server;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.SetMaxTimeNoActive(1);
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.RegCallback_OnDisconnected(NULL, on_disconnected);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	CHECK(wait_disconnected(1, 3000));
+	CHECK(wait_peer_closed(cfd, 1000));
+	close(cfd);
+	server.StopServer();
+}
+
+void test_recv_statistics()
+{
+	test_section("TCPServer receive statistics");
+	WORD port = (WORD)(test_port_base() + 9);
+	g_connected = 0;
+	g_recv_done = 0;
+	g_last_id = 0;
+
+	TCPServer server;
+	RecvContext context;
+	context.server = &server;
+	context.id = 0;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.RegCallback_OnConnected(&context, on_connected_post_recv);
+	server.RegCallback_OnRecvCompleted(NULL, on_recv_completed);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	const char payload[4] = { 'T', 'E', 'S', 'T' };
+	CHECK(send(cfd, payload, sizeof(payload), 0) == (int)sizeof(payload));
+	CHECK(wait_recv_done(2000));
+
+	TCPLinkStatics stats;
+	CHECK(server.GetStatistics(context.id, &stats));
+	CHECK(stats.RecvTotalBytes == 4);
+
+	close(cfd);
+	server.StopServer();
+}
+
+void test_start_failure_recovery()
+{
+	test_section("TCPServer start failure cleanup");
+	WORD port = (WORD)(test_port_base() + 10);
+	TCPServer server;
+	server.SetLocalServerIP("invalid.invalid.invalid");
+	server.SetNetPort(port);
+
+	bool failed = false;
+	try {
+		server.StartServer();
+	} catch (CRK_Exception&) {
+		failed = true;
+	}
+	CHECK(failed);
+
+	g_connected = 0;
+	server.SetLocalServerIP("127.0.0.1");
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.StartServer();
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	close(cfd);
+	server.StopServer();
+}
+
+void test_send_after_peer_reset()
+{
+	test_section("TCPServer send after peer reset");
+	WORD port = (WORD)(test_port_base() + 11);
+	g_connected = 0;
+	g_disconnected = 0;
+	g_last_id = 0;
+
+	TCPServer server;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.RegCallback_OnConnected(NULL, on_connected);
+	server.RegCallback_OnDisconnected(NULL, on_disconnected);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	CHECK(wait_connected(1, 2000));
+	struct linger resetLinger;
+	resetLinger.l_onoff = 1;
+	resetLinger.l_linger = 0;
+	setsockopt(cfd, SOL_SOCKET, SO_LINGER, &resetLinger, sizeof(resetLinger));
+	close(cfd);
+
+	char payload[] = "reset";
+	bool posted = server.PostSend(g_last_id, payload, sizeof(payload));
+	CHECK(posted || errno == ENODATA);
+	CHECK(wait_disconnected(1, 2000));
+	server.StopServer();
+}
+
+void test_stop_from_connected_callback()
+{
+	test_section("TCPServer StopServer from callback");
+	WORD port = (WORD)(test_port_base() + 12);
+	TCPServer server;
+	StopContext context;
+	context.server = &server;
+	context.stopped = 0;
+	server.SetLocalServerIP("127.0.0.1");
+	server.SetNetPort(port);
+	server.RegCallback_OnConnected(&context, on_connected_stop);
+	server.StartServer();
+
+	int cfd = connect_ipv4_fd("127.0.0.1", port, 1000);
+	CHECK(cfd >= 0);
+	if (cfd < 0) {
+		server.StopServer();
+		return;
+	}
+	int waited = 0;
+	while (__sync_fetch_and_add(&context.stopped, 0) == 0 && waited < 3000) {
+		usleep(20 * 1000);
+		waited += 20;
+	}
+	CHECK(__sync_fetch_and_add(&context.stopped, 0) == 1);
+	CHECK(wait_peer_closed(cfd, 1000));
+	close(cfd);
+	// 回收从 AcceptThread 回调中发起停止后留下的可 join 线程。
+	server.StopServer();
 }
 
 } // namespace
@@ -431,4 +776,12 @@ void run_tcpserver_tests()
 	test_ipv6_default_any_bind();
 	test_burst_accept();
 	test_post_send();
+	test_stop_closes_clients();
+	test_cross_thread_close();
+	test_unposted_peer_disconnect();
+	test_idle_timeout();
+	test_recv_statistics();
+	test_start_failure_recovery();
+	test_send_after_peer_reset();
+	test_stop_from_connected_callback();
 }
