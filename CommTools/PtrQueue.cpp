@@ -15,17 +15,17 @@ void PtrQueue::init(size_t InitCapacity)
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-	pthread_mutex_init(&m_mutex,&attr);
+	pthread_mutex_init(&m_mutex, &attr);
+	pthread_mutexattr_destroy(&attr);
 
-    if (m_bBlock) {
-		int r =	pthread_cond_init(&m_cond, NULL);
+	if (m_bBlock) {
+		int r = pthread_cond_init(&m_cond, NULL);
 		if (r != 0)
 		{
 			char buf[MAX_MSG_SIZE];
 			snprintf(buf, MAX_MSG_SIZE, "pthread_cond_init Failed!  Code: %d, %s\n", errno, strerror(errno));
 			throw CRK_Exception(buf);
 		}
-		//printf("cond_init result = %d \n", r);
 	}
 
 	m_Capacity = 0;
@@ -64,41 +64,59 @@ void PtrQueue::allocMemory(const size_t nCapacity)
 	if (nCapacity <= m_Capacity)
 		return;
 
-	//根据所需要存放的个数，并按页面对齐方式计算出的实际页数
-	size_t nSizeInByte = nCapacity * sizeof(void *);
-	size_t nPagesCount = nSizeInByte / PAGE_SIZE;
-	if ((nSizeInByte % PAGE_SIZE) > 0) 
-		nPagesCount++;
+	// 按页对齐计算实际分配字节数与可容纳指针个数
+	size_t nSizeInByte = nCapacity * sizeof(void*);
+	size_t nPagesCount = (nSizeInByte + PAGE_SIZE - 1) / PAGE_SIZE;
+	if (nPagesCount == 0)
+		nPagesCount = 1;
+	size_t nAllocSize = nPagesCount * PAGE_SIZE;
+	size_t newCapacity = nAllocSize / sizeof(void*);
 
-	//分配空间（按上面的页面数计算出的数据）
-	size_t nAllocSize = nPagesCount * PAGE_SIZE;  //字节数
-	m_Capacity = nAllocSize / sizeof(void*); //个数		
 	size_t* pTmpData = (size_t*)malloc(nAllocSize);
-
-	if (m_pData != NULL)  //如果是需要扩容则重新分配空间
+	if (pTmpData == NULL)
 	{
-		if (m_pPush < m_pPop)
-		{   size_t iLen = (size_t)m_pDataEnd - (size_t)m_pPop + sizeof(void*);
-			memcpy(pTmpData, m_pPop, iLen);
-			memcpy(pTmpData + iLen / sizeof(void*), m_pData, (size_t)m_pPush - (size_t)m_pData + sizeof(void*));
+		char buf[MAX_MSG_SIZE];
+		snprintf(buf, MAX_MSG_SIZE, "PtrQueue::allocMemory malloc(%zu) failed\n", nAllocSize);
+		throw CRK_Exception(buf);
+	}
+
+	if (m_pData != NULL)
+	{
+		if (m_Count > 0)
+		{
+			// 将环形缓冲中的有效元素拉直拷贝到新缓冲开头，长度严格按 m_Count
+			if (m_pPush > m_pPop)
+			{
+				memcpy(pTmpData, m_pPop, m_Count * sizeof(void*));
+			}
+			else
+			{
+				// 已绕回: [m_pPop .. m_pDataEnd] + [m_pData .. m_pPush)
+				size_t nFirst = (size_t)(m_pDataEnd - m_pPop + 1);
+				size_t nSecond = m_Count - nFirst;
+				memcpy(pTmpData, m_pPop, nFirst * sizeof(void*));
+				if (nSecond > 0)
+					memcpy(pTmpData + nFirst, m_pData, nSecond * sizeof(void*));
+			}
 			m_pPop = pTmpData;
 			m_pPush = m_pPop + m_Count;
-		} else
-		{
-			memcpy(pTmpData, m_pPop, (size_t)m_pPush - (size_t)m_pPop + sizeof(void*));
-			m_pPop = pTmpData;
-			m_pPush = m_pPop +  m_Count;
 		}
-		free(m_pData);  //释放原空间
-	} else {  //初始情况
+		else
+		{
+			m_pPop = pTmpData;
+			m_pPush = pTmpData;
+		}
+		free(m_pData);
+	}
+	else
+	{
 		m_pPop = pTmpData;
 		m_pPush = pTmpData;
 	}
 
 	m_pData = pTmpData;
-	pTmpData = NULL;
-	m_pDataEnd = m_pData + (m_Capacity - 1);  //m_pDataEnd定位到最后
-
+	m_Capacity = newCapacity;
+	m_pDataEnd = m_pData + (m_Capacity - 1);
 }
 
 void PtrQueue::Lock()
@@ -127,17 +145,20 @@ size_t PtrQueue::getCapacity()
 void PtrQueue::Push(void* ptr)
 {
 	Lock();
-	if (m_Count >= m_Capacity - 1)  //需要重新分配内存
+	// 预留 1 个空槽区分空/满；容量不足时按 2 倍扩容（摊销 O(1)）
+	if (m_Count >= m_Capacity - 1)
 	{
-		allocMemory(m_Capacity + PAGE_SIZE / sizeof(void*));  //新加一个页面大小的内存
+		size_t need = m_Capacity * 2;
+		if (need <= m_Capacity) // 溢出兜底：至少再扩一页
+			need = m_Capacity + PAGE_SIZE / sizeof(void*);
+		allocMemory(need);
 	}
-	*m_pPush = (size_t)ptr; //保存指针值
-    if (m_pPush == m_pDataEnd) //到尾部后重新指向到头
+	*m_pPush = (size_t)ptr;
+	if (m_pPush == m_pDataEnd)
 		m_pPush = m_pData;
 	else
 		m_pPush++;
 
-	//队列里有数据了就通知
 	if (m_bBlock && m_Count == 0) {
 		pthread_cond_signal(&m_cond);
 	}

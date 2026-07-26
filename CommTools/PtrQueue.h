@@ -16,7 +16,6 @@ private:
     pthread_cond_t m_cond;
     void allocMemory(const size_t nCapacity);
     void setCapacity(const size_t nCapacity);
-    size_t getCapacity();
     void init(size_t InitCapacity);
 public:
     PtrQueue(size_t InitCapacity = 8);
@@ -27,6 +26,7 @@ public:
     void Push(void* ptr);
     void* Pop(long wait = 0);
     size_t getCount();
+    size_t getCapacity();
 };
  
 
