@@ -12,6 +12,7 @@ int main()
 	run_memlog_tests();
 	run_iso8583_tests();
 	run_iniparser_tests();
+	run_tcpserver_tests();
 
 	std::printf("\n==== SUMMARY ====\n");
 	std::printf("passed: %d\n", g_stats().passed);

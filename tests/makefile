@@ -14,7 +14,8 @@ CXXFLAGS = -Wall -g -std=c++11 -pthread $(INCLUDES)
 LDFLAGS = -L$(LIB_DIR) -lCommtools -pthread -Wl,-rpath,$(LIB_DIR)
 
 SRCS = test_main.cpp test_commroute.cpp test_md5.cpp test_des.cpp \
-       test_ptrqueue.cpp test_memlog.cpp test_iso8583.cpp test_iniparser.cpp
+       test_ptrqueue.cpp test_memlog.cpp test_iso8583.cpp test_iniparser.cpp \
+       test_tcpserver.cpp
 OBJS = $(SRCS:.cpp=.o)
 TARGET = test_commtools
 

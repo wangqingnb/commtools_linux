@@ -24,7 +24,7 @@ private:
 	_U64 volatile m_TotalRecvBytes;  //接收字节合计
 	_U64 volatile m_TotalSentBytes;  //发送字节合计
 	_U64  m_MaxTimeNoActive; //允许最长的不活动时间（秒）
-	int m_af;  //协议类型 AF_INET， AF_INET6
+	int m_af;  // 地址族：AF_INET（纯 IPv4）或 AF_INET6（纯 IPv6，启动时 IPV6_V6ONLY=1）
 	DWORD volatile m_IDCount;  //连接ID计数
 	WORD m_MaxConnectNum;  //允许的最大连接数
 	WORD m_Port; //监听端口
@@ -82,8 +82,8 @@ public:
 	virtual ~TCPServer(void);
 	bool SetNonblocking(SOCKET sock);
 	void SetNetPort(WORD Port);
-	void SetLocalServerIP(const char* IP);
-	void SetAddressFamily(int af);
+	void SetLocalServerIP(const char* IP); // IPv4 如 0.0.0.0；IPv6 如 :: 或具体地址
+	void SetAddressFamily(int af); // 仅 AF_INET / AF_INET6；切到 IPv6 且绑定仍为 0.0.0.0 时自动改为 ::
 	void SetMaxConnectNum(WORD num);
 	void SetMaxTimeNoActive(WORD secs);
 

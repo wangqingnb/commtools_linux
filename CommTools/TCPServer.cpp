@@ -15,7 +15,31 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 
+namespace {
+
+// Format peer address for logging (IPv4 / IPv6).
+bool FormatSockAddr(const struct sockaddr* addr, socklen_t addrlen, char* buf, size_t buflen)
+{
+	if (buf == NULL || buflen == 0)
+		return false;
+	buf[0] = '\0';
+	if (addr == NULL || addrlen < (socklen_t)sizeof(sa_family_t))
+		return false;
+
+	if (addr->sa_family == AF_INET) {
+		const struct sockaddr_in* a4 = (const struct sockaddr_in*)addr;
+		return inet_ntop(AF_INET, &a4->sin_addr, buf, buflen) != NULL;
+	}
+	if (addr->sa_family == AF_INET6) {
+		const struct sockaddr_in6* a6 = (const struct sockaddr_in6*)addr;
+		return inet_ntop(AF_INET6, &a6->sin6_addr, buf, buflen) != NULL;
+	}
+	return false;
+}
+
+} // namespace
 
 TCPServer::TCPServer(void)
 {
@@ -108,6 +132,15 @@ void TCPServer::StartServer()
 		LOG_F("setsockopt(SO_REUSEADDR) failed! %s\n", strerror(errno));
 	}
 
+	// 纯 IPv6：强制 V6ONLY，避免误收 IPv4-mapped（双栈后续再做）
+	if (m_af == AF_INET6) {
+		int v6only = 1;
+		if (setsockopt(ListenSocket, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+		{
+			LOG_F("setsockopt(IPV6_V6ONLY) failed! %s\n", strerror(errno));
+		}
+	}
+
 	//获取服务地址信息
 	struct addrinfo hints,*pAddInfo;
 	memset(&hints, 0, sizeof(hints));
@@ -121,19 +154,12 @@ void TCPServer::StartServer()
 	char Msg[MAX_MSG_SIZE];
 	DWORD rc = getaddrinfo(m_LocalServerIP, sPort, &hints, &pAddInfo);
 	if (rc != 0) {
+		close(ListenSocket);
+		ListenSocket = -1;
 		LOG_F("getaddrinfo() failed with error, %s at %s %d\n", errno, __FILE__, __LINE__);
 		snprintf(Msg, MAX_MSG_SIZE, "getaddrinfo() failed with error %d, %s at %s %d\n", errno, gai_strerror(rc), __FILE__, __LINE__);
 		throw CRK_Exception(Msg);
 	}
-/*
-	if (bind(ListenSocket, pAddInfo->ai_addr, (int)pAddInfo->ai_addrlen) < 0)
-	{
-		close(ListenSocket);
-		LOG_F("bind() failed with error! Code:%d  at %s %d\n", errno, __FILE__, __LINE__);
-		snprintf(Msg, MAX_MSG_SIZE, "bind() failed with error! Code:%d, %s\n", errno, strerror(errno));
-		throw CRK_Exception(Msg);
-	}
-*/
 
 	//绑定监听Socket 重试6次
 	int iRetry = 1;
@@ -145,7 +171,9 @@ void TCPServer::StartServer()
 				LOG_F("bind() failed with error! Code:%d， wait 10 secs! retry times=%d \n", errno, iRetry);
 				usleep(10000 * 1000); //等待10秒
 			} else {
+				freeaddrinfo(pAddInfo);
 				close(ListenSocket);
+				ListenSocket = -1;
 				LOG_F("bind() failed with error! Code:%d  at %s %d\n", errno, __FILE__, __LINE__);
 				snprintf(Msg, MAX_MSG_SIZE, "bind() failed with error! Code:%d, %s\n", errno, strerror(errno));
 				throw CRK_Exception(Msg);
@@ -414,9 +442,7 @@ void* TCPServer::AcceptThread(void* lpParameter)
 
 	//注册epoll事件
 	epoll_ctl(epfd, EPOLL_CTL_ADD, inst->ListenSocket, &ev);
-	
-	struct sockaddr_in clientaddr;
-	socklen_t clilen = sizeof(struct sockaddr);;
+
 	while (1)
 	{
 		if (inst->m_Terminated) break;
@@ -426,13 +452,17 @@ void* TCPServer::AcceptThread(void* lpParameter)
 			//如果新监测到一个SOCKET用户连接到了绑定的SOCKET端口，建立新的连接。
 			if (Events[i].data.fd == inst->ListenSocket)
 			{
+				struct sockaddr_storage clientaddr;
+				socklen_t clilen = sizeof(clientaddr);
 				SOCKET connfd = accept(inst->ListenSocket, (sockaddr*)&clientaddr, &clilen);
 				if (connfd < 0) {
 					LOG_SF("Accept socket error! %s, at %s %d\n", strerror(errno), __FILE__, __LINE__);
 					break;
 				}
-				char* str = inet_ntoa(clientaddr.sin_addr);
-				LOG_SF("new client connected!,ip:%s\n", str);
+				char ipstr[INET6_ADDRSTRLEN] = { 0 };
+				if (!FormatSockAddr((sockaddr*)&clientaddr, clilen, ipstr, sizeof(ipstr)))
+					strncpy(ipstr, "?", sizeof(ipstr) - 1);
+				LOG_SF("new client connected!,ip:%s\n", ipstr);
 
 				if (inst->m_ConnTotal >= inst->m_MaxConnectNum) {
 					LOG_SF("too many connection!, current connects:%d, MaxConnect:%d\n", inst->m_ConnTotal, inst->m_MaxConnectNum);
@@ -752,7 +782,16 @@ long TCPServer::GenID()
 
 void TCPServer::SetAddressFamily(int af)
 {
+	if (af != AF_INET && af != AF_INET6) {
+		LOG_F("SetAddressFamily: unsupported af=%d, keep af=%d (use AF_INET or AF_INET6)\n", af, m_af);
+		return;
+	}
 	m_af = af;
+	// 切换地址族时，若仍是对端族的“任意地址”默认值，则同步为当前族默认
+	if (af == AF_INET6 && strcmp(m_LocalServerIP, "0.0.0.0") == 0)
+		strcpy(m_LocalServerIP, "::");
+	else if (af == AF_INET && strcmp(m_LocalServerIP, "::") == 0)
+		strcpy(m_LocalServerIP, "0.0.0.0");
 }
 
 void TCPServer::SetMaxConnectNum(WORD num)
@@ -780,8 +819,10 @@ void TCPServer::SetMaxTimeNoActive(WORD secs)
 
 void TCPServer::SetLocalServerIP(const char* IP)
 {
+	if (IP == NULL)
+		return;
 	memset(m_LocalServerIP, 0, sizeof(m_LocalServerIP));
-	memcpy(m_LocalServerIP, IP, strlen(IP));
+	strncpy(m_LocalServerIP, IP, sizeof(m_LocalServerIP) - 1);
 }
 
 /*

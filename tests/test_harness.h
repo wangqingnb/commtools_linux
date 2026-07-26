@@ -42,3 +42,4 @@ void run_ptrqueue_tests();
 void run_iso8583_tests();
 void run_iniparser_tests();
 void run_memlog_tests();
+void run_tcpserver_tests();
